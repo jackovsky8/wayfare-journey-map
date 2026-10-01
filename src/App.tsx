@@ -1,27 +1,39 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  BookOpen,
+  ChevronDown,
   Download,
   GripVertical,
   ImageDown,
+  ImagePlus,
   KeyRound,
+  Layers3,
   LocateFixed,
   Map,
   MapPin,
+  Palette,
   Plus,
   Route,
   Search,
   Settings2,
+  SlidersHorizontal,
   Trash2,
+  Type,
+  Upload,
   X,
 } from "lucide-react";
 import { JourneyMap, type JourneyMapHandle } from "./components/JourneyMap";
 import {
   buildGpx,
+  composeJourneyRoute,
+  distanceBetween,
   downloadText,
   formatDistance,
   moveItem,
-  straightRoute,
+  parseGpx,
+  resizeImage,
 } from "./lib/journey";
+import { BUILT_IN_MAPS, findMap } from "./lib/maps";
 import {
   routeWithMapbox,
   routeWithOsrm,
@@ -30,65 +42,153 @@ import {
 } from "./lib/providers";
 import type {
   AppSettings,
-  MapStyleId,
+  JourneyItem,
+  MapSource,
+  MapSourceKind,
   MarkerKind,
+  PhotoStyle,
   Place,
   RouteGeometry,
 } from "./types";
 
-const STORAGE_KEY = "wayfare.journey.v1";
+const STORAGE_KEY = "wayfare.journey.v2";
+const SETTINGS_KEY = "wayfare.settings.v2";
+const emptyRoute: RouteGeometry = {
+  coordinates: [],
+  distanceMeters: 0,
+  durationSeconds: 0,
+};
+
 const defaults: AppSettings = {
-  mapStyle: "paper",
+  mapStyle: "ofm-positron",
   routeColor: "#df5f3f",
   routeWidth: 5,
   autoFit: true,
   manualZoom: 7,
   provider: "osrm",
   mapboxToken: "",
-  googleKey: "",
-};
-const initialRoute: RouteGeometry = {
-  coordinates: [],
-  distanceMeters: 0,
-  durationSeconds: 0,
+  labels: {
+    fontSize: 13,
+    textColor: "#2b302a",
+    backgroundColor: "#fffaf0",
+    borderColor: "#df5f3f",
+    borderWidth: 1,
+    radius: 9,
+    showDescriptions: true,
+  },
+  photos: {
+    size: 112,
+    borderWidth: 4,
+    borderColor: "#fffaf0",
+    radius: 18,
+  },
+  callouts: {
+    connectorColor: "#df5f3f",
+    connectorWidth: 2,
+    connectorStyle: "curved",
+  },
+  customMaps: [],
 };
 
-function loadPlaces(): Place[] {
+const defaultPhoto = (dataUrl: string, fileName: string): PhotoStyle => ({
+  dataUrl,
+  fileName,
+  cropX: 50,
+  cropY: 50,
+  zoom: 1,
+});
+
+function loadItems(): JourneyItem[] {
   try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]") as Place[];
+    const current = JSON.parse(
+      localStorage.getItem(STORAGE_KEY) || "[]",
+    ) as JourneyItem[];
+    if (current.length) return current;
+    const legacy = JSON.parse(
+      localStorage.getItem("wayfare.journey.v1") || "[]",
+    ) as Array<Partial<Place>>;
+    return legacy.map((place) => ({
+      ...place,
+      id: place.id || crypto.randomUUID(),
+      type: "place",
+      name: place.name || "Untitled place",
+      description: "",
+      lat: place.lat || 0,
+      lng: place.lng || 0,
+      marker: place.marker || "pin",
+    }));
   } catch {
     return [];
   }
 }
 
+function loadSettings(): AppSettings {
+  try {
+    const saved = JSON.parse(
+      localStorage.getItem(SETTINGS_KEY) || "{}",
+    ) as Partial<AppSettings>;
+    return {
+      ...defaults,
+      ...saved,
+      labels: { ...defaults.labels, ...saved.labels },
+      photos: { ...defaults.photos, ...saved.photos },
+      callouts: { ...defaults.callouts, ...saved.callouts },
+      mapboxToken: sessionStorage.getItem("wayfare.mapbox") || "",
+    };
+  } catch {
+    return defaults;
+  }
+}
+
 export function App() {
-  const [places, setPlaces] = useState<Place[]>(loadPlaces);
-  const [route, setRoute] = useState<RouteGeometry>(() =>
-    straightRoute(loadPlaces()),
-  );
-  const [settings, setSettings] = useState<AppSettings>(() => ({
-    ...defaults,
-    mapboxToken: sessionStorage.getItem("wayfare.mapbox") || "",
-  }));
+  const [items, setItems] = useState<JourneyItem[]>(loadItems);
+  const [route, setRoute] = useState<RouteGeometry>(emptyRoute);
+  const [settings, setSettings] = useState<AppSettings>(loadSettings);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
   const [searching, setSearching] = useState(false);
   const [insertAt, setInsertAt] = useState<number | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const [editingPlace, setEditingPlace] = useState<string | null>(null);
   const [routeStatus, setRouteStatus] = useState<
     "idle" | "routing" | "fallback"
   >("idle");
   const [notice, setNotice] = useState("");
   const [dragged, setDragged] = useState<number | null>(null);
+  const [newMap, setNewMap] = useState({
+    name: "",
+    kind: "style" as MapSourceKind,
+    url: "",
+    attribution: "",
+  });
   const mapRef = useRef<JourneyMapHandle>(null);
+  const gpxInputRef = useRef<HTMLInputElement>(null);
+
+  const places = useMemo(
+    () => items.filter((item): item is Place => item.type === "place"),
+    [items],
+  );
+  const tracks = items.filter((item) => item.type === "track");
+  const allMaps = [...BUILT_IN_MAPS, ...settings.customMaps];
+  const activeMap = findMap(settings.mapStyle, settings.customMaps);
+  const activePlace = places.find((place) => place.id === editingPlace);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(places));
-  }, [places]);
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+    } catch {
+      setNotice(
+        "Browser storage is full. Remove some photographs or export your journey before continuing.",
+      );
+    }
+  }, [items]);
   useEffect(() => {
+    const { mapboxToken: _token, ...safe } = settings;
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(safe));
     sessionStorage.setItem("wayfare.mapbox", settings.mapboxToken);
-  }, [settings.mapboxToken]);
+  }, [settings]);
 
   useEffect(() => {
     if (query.trim().length < 2) {
@@ -109,74 +209,163 @@ export function App() {
       }
     }, 350);
     return () => {
-      window.clearTimeout(timeout);
+      clearTimeout(timeout);
       controller.abort();
     };
   }, [query]);
 
   useEffect(() => {
     const controller = new AbortController();
-    const update = async () => {
-      if (places.length < 2) {
-        setRoute(straightRoute(places));
+    const connect = async (
+      from: [number, number],
+      to: [number, number],
+    ): Promise<RouteGeometry> => {
+      if (from[0] === to[0] && from[1] === to[1])
+        return { coordinates: [from], distanceMeters: 0, durationSeconds: 0 };
+      const endpoints: Place[] = [
+        {
+          id: "from",
+          type: "place",
+          name: "",
+          description: "",
+          marker: "route",
+          lng: from[0],
+          lat: from[1],
+        },
+        {
+          id: "to",
+          type: "place",
+          name: "",
+          description: "",
+          marker: "route",
+          lng: to[0],
+          lat: to[1],
+        },
+      ];
+      try {
+        return settings.provider === "mapbox" && settings.mapboxToken
+          ? await routeWithMapbox(
+              endpoints,
+              settings.mapboxToken,
+              controller.signal,
+            )
+          : await routeWithOsrm(endpoints, controller.signal);
+      } catch {
+        return {
+          coordinates: [from, to],
+          distanceMeters: distanceBetween(from, to),
+          durationSeconds: 0,
+        };
+      }
+    };
+    const timeout = window.setTimeout(async () => {
+      if (!items.length) {
+        setRoute(emptyRoute);
         return;
       }
       setRouteStatus("routing");
       try {
-        const next =
-          settings.provider === "mapbox" && settings.mapboxToken
-            ? await routeWithMapbox(
-                places,
-                settings.mapboxToken,
-                controller.signal,
-              )
-            : await routeWithOsrm(places, controller.signal);
-        setRoute(next);
+        setRoute(await composeJourneyRoute(items, connect));
         setRouteStatus("idle");
-        setNotice("");
       } catch {
-        if (!controller.signal.aborted) {
-          setRoute(straightRoute(places));
-          setRouteStatus("fallback");
-          setNotice(
-            "Road routing is unavailable, so the journey is shown as straight connections.",
-          );
-        }
+        if (!controller.signal.aborted) setRouteStatus("fallback");
       }
-    };
-    const timeout = window.setTimeout(update, 250);
+    }, 220);
     return () => {
-      window.clearTimeout(timeout);
+      clearTimeout(timeout);
       controller.abort();
     };
-  }, [places, settings.provider, settings.mapboxToken]);
+  }, [items, settings.provider, settings.mapboxToken]);
+
+  const updatePlace = (id: string, patch: Partial<Place>) =>
+    setItems((current) =>
+      current.map((item) =>
+        item.id === id && item.type === "place" ? { ...item, ...patch } : item,
+      ),
+    );
 
   const addPlace = (result: SearchResult) => {
-    const place: Place = { id: crypto.randomUUID(), ...result, marker: "pin" };
-    setPlaces((current) => {
-      if (insertAt === null) return [...current, place];
+    const place: Place = {
+      id: crypto.randomUUID(),
+      type: "place",
+      ...result,
+      description: "",
+      marker: "pin",
+    };
+    setItems((current) => {
       const copy = [...current];
-      copy.splice(insertAt, 0, place);
+      copy.splice(insertAt ?? current.length, 0, place);
       return copy;
     });
     setQuery("");
     setResults([]);
     setInsertAt(null);
+    setEditingPlace(place.id);
   };
 
-  const updatePlace = (id: string, patch: Partial<Place>) =>
-    setPlaces((items) =>
-      items.map((item) => (item.id === id ? { ...item, ...patch } : item)),
-    );
-  const stats = useMemo(
-    () => ({
-      distance: route.coordinates.length
-        ? formatDistance(route.distanceMeters)
-        : "—",
-      stops: places.length,
-    }),
-    [route, places.length],
-  );
+  const importGpx = async (file?: File) => {
+    if (!file) return;
+    try {
+      const track = parseGpx(await file.text(), file.name);
+      setItems((current) => {
+        const copy = [...current];
+        copy.splice(insertAt ?? current.length, 0, track);
+        return copy;
+      });
+      setInsertAt(null);
+      setNotice(
+        `Added “${track.name}” with ${track.coordinates.length.toLocaleString()} track points.`,
+      );
+    } catch (error) {
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "The GPX track could not be imported.",
+      );
+    }
+  };
+
+  const addPhoto = async (place: Place, file?: File) => {
+    if (!file) return;
+    try {
+      updatePlace(place.id, {
+        photo: defaultPhoto(await resizeImage(file), file.name),
+      });
+    } catch (error) {
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "The photograph could not be added.",
+      );
+    }
+  };
+
+  const addCustomMap = () => {
+    if (!newMap.name.trim() || !newMap.url.trim()) {
+      setNotice("Give the map a name and URL before adding it.");
+      return;
+    }
+    if (newMap.kind === "raster" && !newMap.url.includes("{z}")) {
+      setNotice(
+        "A raster XYZ URL must include {z}, {x}, and {y} placeholders.",
+      );
+      return;
+    }
+    const map: MapSource = {
+      id: `custom-${crypto.randomUUID()}`,
+      name: newMap.name.trim(),
+      description: "Your custom map source.",
+      kind: newMap.kind,
+      url: newMap.url.trim(),
+      attribution: newMap.attribution.trim() || "Custom map provider",
+    };
+    setSettings((current) => ({
+      ...current,
+      customMaps: [...current.customMaps, map],
+      mapStyle: map.id,
+    }));
+    setNewMap({ name: "", kind: "style", url: "", attribution: "" });
+  };
 
   return (
     <main className="app-shell">
@@ -188,6 +377,10 @@ export function App() {
           <span>Wayfare</span>
         </div>
         <div className="top-actions">
+          <button className="button ghost" onClick={() => setHelpOpen(true)}>
+            <BookOpen size={17} />
+            <span>Help</span>
+          </button>
           <button
             className="button ghost"
             onClick={() => setSettingsOpen(true)}
@@ -199,7 +392,7 @@ export function App() {
           <button
             className="button dark"
             onClick={() => setExportOpen(true)}
-            disabled={places.length === 0}
+            disabled={!items.length}
           >
             <Download size={17} />
             Export
@@ -211,169 +404,180 @@ export function App() {
         <aside className="journey-panel">
           <div className="panel-heading">
             <p className="eyebrow">Journey builder</p>
-            <h1>Where did you go?</h1>
+            <h1>Tell the whole route.</h1>
             <p>
-              Add each stop in order. We’ll trace the roads and frame the map.
+              Mix places with recorded GPX tracks, then add notes and
+              photographs.
             </p>
           </div>
-
-          <div className="search-wrap">
-            <Search size={19} />
+          <div className="builder-actions">
+            <div className="search-wrap">
+              <Search size={19} />
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder={
+                  items.length
+                    ? "Add another place…"
+                    : "Start with a city or landmark…"
+                }
+                aria-label="Search for a place"
+              />
+              {query && (
+                <button onClick={() => setQuery("")} aria-label="Clear search">
+                  <X size={16} />
+                </button>
+              )}
+              {(query.length >= 2 || searching) && (
+                <div className="search-results" role="listbox">
+                  {searching && (
+                    <div className="search-state">Searching the map…</div>
+                  )}
+                  {!searching &&
+                    results.map((result) => (
+                      <button
+                        role="option"
+                        key={`${result.lat}-${result.lng}`}
+                        onClick={() => addPlace(result)}
+                      >
+                        <MapPin size={17} />
+                        <span>
+                          <strong>{result.name}</strong>
+                          <small>{result.subtitle}</small>
+                        </span>
+                      </button>
+                    ))}
+                  {!searching && !results.length && (
+                    <div className="search-state">
+                      No places found. Try a broader name.
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+            <button
+              className="gpx-button"
+              onClick={() => gpxInputRef.current?.click()}
+            >
+              <Upload size={17} />
+              Import GPX
+            </button>
             <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder={
-                places.length
-                  ? "Add another place…"
-                  : "Start with a city or landmark…"
-              }
-              aria-label="Search for a place"
+              ref={gpxInputRef}
+              className="visually-hidden"
+              type="file"
+              accept=".gpx,application/gpx+xml"
+              onChange={(event) => {
+                void importGpx(event.target.files?.[0]);
+                event.target.value = "";
+              }}
+              aria-label="Import GPX track"
             />
-            {query && (
-              <button
-                onClick={() => {
-                  setQuery("");
-                  setInsertAt(null);
-                }}
-                aria-label="Clear search"
-              >
-                <X size={16} />
-              </button>
-            )}
-            {(query.length >= 2 || searching) && (
-              <div className="search-results" role="listbox">
-                {searching && (
-                  <div className="search-state">Searching the map…</div>
-                )}
-                {!searching &&
-                  results.map((result) => (
-                    <button
-                      role="option"
-                      key={`${result.lat}-${result.lng}`}
-                      onClick={() => addPlace(result)}
-                    >
-                      <MapPin size={17} />
-                      <span>
-                        <strong>{result.name}</strong>
-                        <small>{result.subtitle}</small>
-                      </span>
-                    </button>
-                  ))}
-                {!searching && results.length === 0 && (
-                  <div className="search-state">
-                    No places found. Try a broader name.
-                  </div>
-                )}
-              </div>
-            )}
           </div>
-
           {insertAt !== null && (
             <div className="insert-note">
-              <Plus size={14} /> Adding a stop at position {insertAt + 1}
+              <Plus size={14} />
+              Adding at position {insertAt + 1}
               <button onClick={() => setInsertAt(null)}>Cancel</button>
             </div>
           )}
 
-          <div className="stops" aria-label="Visited places">
-            {places.length === 0 ? (
+          <div className="stops" aria-label="Journey items">
+            {!items.length ? (
               <div className="empty-state">
                 <div className="empty-icon">
                   <Map size={23} />
                 </div>
                 <strong>Your journey starts here</strong>
-                <span>Search for the first place you visited.</span>
+                <span>Search for a place or import a GPX track.</span>
               </div>
             ) : (
-              places.map((place, index) => (
-                <div key={place.id}>
+              items.map((item, index) => (
+                <div key={item.id}>
                   <article
-                    className={`stop-card ${dragged === index ? "dragging" : ""}`}
+                    className={`stop-card ${item.type === "track" ? "track-card" : ""} ${dragged === index ? "dragging" : ""}`}
                     draggable
                     onDragStart={() => setDragged(index)}
                     onDragOver={(event) => event.preventDefault()}
                     onDrop={() => {
                       if (dragged !== null)
-                        setPlaces(moveItem(places, dragged, index));
+                        setItems(moveItem(items, dragged, index));
                       setDragged(null);
                     }}
                   >
                     <GripVertical className="drag-handle" size={18} />
-                    <span className="stop-number">{index + 1}</span>
+                    <span className="stop-number">
+                      {item.type === "track" ? <Route size={14} /> : index + 1}
+                    </span>
                     <div className="stop-copy">
                       <input
-                        value={place.name}
+                        value={item.name}
                         onChange={(event) =>
-                          updatePlace(place.id, { name: event.target.value })
+                          setItems((current) =>
+                            current.map((entry) =>
+                              entry.id === item.id
+                                ? { ...entry, name: event.target.value }
+                                : entry,
+                            ),
+                          )
                         }
-                        aria-label={`Name for stop ${index + 1}`}
+                        aria-label={`Name for item ${index + 1}`}
                       />
-                      <small>{place.subtitle}</small>
+                      <small>
+                        {item.type === "track"
+                          ? `${item.coordinates.length.toLocaleString()} GPX points · connected at both ends`
+                          : item.description ||
+                            item.subtitle ||
+                            "Add a story and photograph"}
+                      </small>
                     </div>
-                    <select
-                      value={place.marker}
-                      onChange={(event) =>
-                        updatePlace(place.id, {
-                          marker: event.target.value as MarkerKind,
-                        })
-                      }
-                      aria-label={`Marker style for ${place.name}`}
-                    >
-                      <option value="pin">Pin</option>
-                      <option value="dot">Dot</option>
-                      <option value="route">Route only</option>
-                    </select>
+                    {item.type === "place" && (
+                      <button
+                        className="mini-button"
+                        onClick={() => setEditingPlace(item.id)}
+                      >
+                        <SlidersHorizontal size={14} />
+                        Edit
+                      </button>
+                    )}
                     <button
                       className="icon-button danger"
                       onClick={() =>
-                        setPlaces((items) =>
-                          items.filter((item) => item.id !== place.id),
+                        setItems((current) =>
+                          current.filter((entry) => entry.id !== item.id),
                         )
                       }
-                      aria-label={`Delete ${place.name}`}
+                      aria-label={`Delete ${item.name}`}
                     >
                       <Trash2 size={16} />
                     </button>
                   </article>
-                  {index < places.length - 1 && (
+                  {index < items.length - 1 && (
                     <button
                       className="insert-button"
-                      onClick={() => {
-                        setInsertAt(index + 1);
-                        document
-                          .querySelector<HTMLInputElement>(
-                            '[aria-label="Search for a place"]',
-                          )
-                          ?.focus();
-                      }}
+                      onClick={() => setInsertAt(index + 1)}
                     >
-                      <Plus size={13} /> Add stop here
+                      <Plus size={13} />
+                      Insert place or GPX here
                     </button>
                   )}
                 </div>
               ))
             )}
           </div>
-
-          {places.length > 0 && (
+          {!!items.length && (
             <div className="journey-summary">
               <div>
                 <span>Distance</span>
-                <strong>{stats.distance}</strong>
+                <strong>{formatDistance(route.distanceMeters)}</strong>
               </div>
               <div>
-                <span>Stops</span>
-                <strong>{stats.stops}</strong>
+                <span>Places</span>
+                <strong>{places.length}</strong>
               </div>
               <div>
-                <span>Route</span>
-                <strong>
-                  {routeStatus === "routing"
-                    ? "Tracing…"
-                    : routeStatus === "fallback"
-                      ? "Direct"
-                      : "Roads"}
-                </strong>
+                <span>Tracks</span>
+                <strong>{tracks.length}</strong>
               </div>
             </div>
           )}
@@ -384,32 +588,52 @@ export function App() {
             ref={mapRef}
             places={places}
             route={route}
-            mapStyle={settings.mapStyle}
+            mapSource={activeMap}
             routeColor={settings.routeColor}
             routeWidth={settings.routeWidth}
             autoFit={settings.autoFit}
             zoom={settings.manualZoom}
+            labels={settings.labels}
+            photos={settings.photos}
+            callouts={settings.callouts}
           />
           <div className="map-toolbar">
             <select
               value={settings.mapStyle}
               onChange={(event) =>
-                setSettings((value) => ({
-                  ...value,
-                  mapStyle: event.target.value as MapStyleId,
+                setSettings((current) => ({
+                  ...current,
+                  mapStyle: event.target.value,
                 }))
               }
               aria-label="Map style"
             >
-              <option value="paper">Paper</option>
-              <option value="atlas">Atlas</option>
-              <option value="midnight">Midnight</option>
+              <optgroup label="Free built-in maps">
+                {BUILT_IN_MAPS.map((map) => (
+                  <option value={map.id} key={map.id}>
+                    {map.name}
+                  </option>
+                ))}
+              </optgroup>
+              {!!settings.customMaps.length && (
+                <optgroup label="Your maps">
+                  {settings.customMaps.map((map) => (
+                    <option value={map.id} key={map.id}>
+                      {map.name}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
             </select>
             <button onClick={() => mapRef.current?.fit()}>
               <LocateFixed size={16} />
               Fit journey
             </button>
           </div>
+          <div className="map-credit">{activeMap.description}</div>
+          {routeStatus === "routing" && (
+            <div className="routing-pill">Connecting journey…</div>
+          )}
           {notice && (
             <div className="notice" role="status">
               {notice}
@@ -418,205 +642,856 @@ export function App() {
               </button>
             </div>
           )}
-          {places.length === 0 && (
+          {!items.length && (
             <div className="map-prompt">
               <MapPin size={22} />
-              <span>Your route will appear here</span>
+              <span>Your journey will appear here</span>
             </div>
           )}
         </section>
       </section>
 
-      {settingsOpen && (
-        <div
-          className="modal-backdrop"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setSettingsOpen(false);
-          }}
+      {activePlace && (
+        <Modal
+          title="Place details"
+          eyebrow="Story & photograph"
+          onClose={() => setEditingPlace(null)}
         >
-          <section
-            className="modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="settings-title"
-          >
-            <div className="modal-title">
-              <div>
-                <p className="eyebrow">Map controls</p>
-                <h2 id="settings-title">Settings</h2>
-              </div>
-              <button
-                className="icon-button"
-                onClick={() => setSettingsOpen(false)}
-                aria-label="Close settings"
+          <div className="place-editor">
+            <label>
+              Place name
+              <input
+                value={activePlace.name}
+                onChange={(event) =>
+                  updatePlace(activePlace.id, { name: event.target.value })
+                }
+              />
+            </label>
+            <label>
+              Description
+              <textarea
+                rows={3}
+                value={activePlace.description}
+                onChange={(event) =>
+                  updatePlace(activePlace.id, {
+                    description: event.target.value,
+                  })
+                }
+                placeholder="What made this stop memorable?"
+              />
+            </label>
+            <label>
+              Map marker
+              <select
+                value={activePlace.marker}
+                onChange={(event) =>
+                  updatePlace(activePlace.id, {
+                    marker: event.target.value as MarkerKind,
+                  })
+                }
               >
-                <X />
-              </button>
-            </div>
-            <label>
-              Route color
-              <input
-                type="color"
-                value={settings.routeColor}
-                onChange={(event) =>
-                  setSettings((value) => ({
-                    ...value,
-                    routeColor: event.target.value,
-                  }))
-                }
-              />
+                <option value="pin">Numbered pin</option>
+                <option value="dot">Small dot</option>
+                <option value="route">Route only</option>
+              </select>
             </label>
-            <label>
-              Route width <output>{settings.routeWidth}px</output>
-              <input
-                type="range"
-                min="2"
-                max="10"
-                value={settings.routeWidth}
-                onChange={(event) =>
-                  setSettings((value) => ({
-                    ...value,
-                    routeWidth: Number(event.target.value),
-                  }))
-                }
-              />
-            </label>
-            <label className="toggle-row">
-              Automatically fit journey
-              <input
-                type="checkbox"
-                checked={settings.autoFit}
-                onChange={(event) =>
-                  setSettings((value) => ({
-                    ...value,
-                    autoFit: event.target.checked,
-                  }))
-                }
-              />
-            </label>
-            {!settings.autoFit && (
-              <label>
-                Zoom level <output>{settings.manualZoom}</output>
+            <div className="photo-editor">
+              <div className="section-heading">
+                <ImagePlus size={18} />
+                <div>
+                  <strong>Photograph</strong>
+                  <small>
+                    Images are resized and stored only in this browser.
+                  </small>
+                </div>
+              </div>
+              <label className="upload-zone">
+                {activePlace.photo ? "Replace photograph" : "Choose photograph"}
                 <input
-                  type="range"
-                  min="2"
-                  max="16"
-                  value={settings.manualZoom}
+                  type="file"
+                  accept="image/*"
                   onChange={(event) =>
-                    setSettings((value) => ({
-                      ...value,
-                      manualZoom: Number(event.target.value),
+                    void addPhoto(activePlace, event.target.files?.[0])
+                  }
+                />
+              </label>
+              {activePlace.photo && (
+                <>
+                  <div
+                    className="photo-preview"
+                    style={{
+                      width: settings.photos.size,
+                      height: settings.photos.size,
+                      border: `${settings.photos.borderWidth}px solid ${settings.photos.borderColor}`,
+                      borderRadius: `${settings.photos.radius}%`,
+                      backgroundImage: `url("${activePlace.photo.dataUrl}")`,
+                      backgroundSize: `${activePlace.photo.zoom * 100}%`,
+                      backgroundPosition: `${activePlace.photo.cropX}% ${activePlace.photo.cropY}%`,
+                    }}
+                  />
+                  <Slider
+                    label="Crop left/right"
+                    min={0}
+                    max={100}
+                    value={activePlace.photo.cropX}
+                    onChange={(value) =>
+                      updatePlace(activePlace.id, {
+                        photo: { ...activePlace.photo!, cropX: value },
+                      })
+                    }
+                  />
+                  <Slider
+                    label="Crop up/down"
+                    min={0}
+                    max={100}
+                    value={activePlace.photo.cropY}
+                    onChange={(value) =>
+                      updatePlace(activePlace.id, {
+                        photo: { ...activePlace.photo!, cropY: value },
+                      })
+                    }
+                  />
+                  <Slider
+                    label="Photo zoom"
+                    min={1}
+                    max={3}
+                    step={0.1}
+                    value={activePlace.photo.zoom}
+                    onChange={(value) =>
+                      updatePlace(activePlace.id, {
+                        photo: { ...activePlace.photo!, zoom: value },
+                      })
+                    }
+                  />
+                  <p className="field-help">
+                    Size, frame, and rounding are shared by all photographs.
+                    Change them in Settings → Photograph style.
+                  </p>
+                  <button
+                    className="text-danger"
+                    onClick={() =>
+                      updatePlace(activePlace.id, { photo: undefined })
+                    }
+                  >
+                    Remove photograph
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {settingsOpen && (
+        <Modal
+          title="Settings"
+          eyebrow="Make it yours"
+          onClose={() => setSettingsOpen(false)}
+          wide
+        >
+          <div className="settings-groups">
+            <SettingGroup
+              icon={<Layers3 />}
+              title="Map background"
+              description="Choose the visual foundation beneath your journey."
+              open
+            >
+              <label>
+                Map style
+                <select
+                  value={settings.mapStyle}
+                  onChange={(event) =>
+                    setSettings((current) => ({
+                      ...current,
+                      mapStyle: event.target.value,
+                    }))
+                  }
+                >
+                  {allMaps.map((map) => (
+                    <option value={map.id} key={map.id}>
+                      {map.name} — {map.description}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <p className="field-help">
+                The built-in styles are free and need no key. Public services
+                may have fair-use limits and no uptime guarantee.
+              </p>
+            </SettingGroup>
+            <SettingGroup
+              icon={<Palette />}
+              title="Route appearance"
+              description="Controls the line connecting every place and GPX track."
+            >
+              <ColorField
+                label="Route color"
+                value={settings.routeColor}
+                onChange={(value) =>
+                  setSettings((current) => ({ ...current, routeColor: value }))
+                }
+              />
+              <Slider
+                label="Route width"
+                min={2}
+                max={12}
+                value={settings.routeWidth}
+                suffix="px"
+                onChange={(value) =>
+                  setSettings((current) => ({ ...current, routeWidth: value }))
+                }
+              />
+              <label className="check-row">
+                <span>
+                  <strong>Automatically fit journey</strong>
+                  <small>Keep all journey items inside the map frame.</small>
+                </span>
+                <input
+                  type="checkbox"
+                  checked={settings.autoFit}
+                  onChange={(event) =>
+                    setSettings((current) => ({
+                      ...current,
+                      autoFit: event.target.checked,
                     }))
                   }
                 />
               </label>
-            )}
-            <div className="key-section">
-              <div className="key-heading">
-                <KeyRound size={18} />
-                <div>
-                  <strong>Optional Mapbox routing</strong>
-                  <small>
-                    Unlock an alternative routing provider. The token stays in
-                    this browser tab.
-                  </small>
-                </div>
-              </div>
-              <input
-                type="password"
-                value={settings.mapboxToken}
-                onChange={(event) =>
-                  setSettings((value) => ({
-                    ...value,
-                    mapboxToken: event.target.value,
-                    provider: event.target.value ? "mapbox" : "osrm",
+              {!settings.autoFit && (
+                <Slider
+                  label="Manual zoom"
+                  min={2}
+                  max={16}
+                  value={settings.manualZoom}
+                  onChange={(value) =>
+                    setSettings((current) => ({
+                      ...current,
+                      manualZoom: value,
+                    }))
+                  }
+                />
+              )}
+            </SettingGroup>
+            <SettingGroup
+              icon={<Type />}
+              title="Place labels"
+              description="Sets the default caption style for every place."
+            >
+              <Slider
+                label="Text size"
+                min={10}
+                max={24}
+                value={settings.labels.fontSize}
+                suffix="px"
+                onChange={(value) =>
+                  setSettings((current) => ({
+                    ...current,
+                    labels: { ...current.labels, fontSize: value },
                   }))
                 }
-                placeholder="pk.ey…"
-                aria-label="Mapbox access token"
               />
-              {settings.mapboxToken && (
-                <div className="unlocked">Mapbox routing enabled</div>
+              <div className="two-fields">
+                <ColorField
+                  label="Text"
+                  value={settings.labels.textColor}
+                  onChange={(value) =>
+                    setSettings((current) => ({
+                      ...current,
+                      labels: { ...current.labels, textColor: value },
+                    }))
+                  }
+                />
+                <ColorField
+                  label="Background"
+                  value={settings.labels.backgroundColor}
+                  onChange={(value) =>
+                    setSettings((current) => ({
+                      ...current,
+                      labels: { ...current.labels, backgroundColor: value },
+                    }))
+                  }
+                />
+              </div>
+              <div className="two-fields">
+                <ColorField
+                  label="Border"
+                  value={settings.labels.borderColor}
+                  onChange={(value) =>
+                    setSettings((current) => ({
+                      ...current,
+                      labels: { ...current.labels, borderColor: value },
+                    }))
+                  }
+                />
+                <Slider
+                  label="Border width"
+                  min={0}
+                  max={6}
+                  value={settings.labels.borderWidth}
+                  suffix="px"
+                  onChange={(value) =>
+                    setSettings((current) => ({
+                      ...current,
+                      labels: { ...current.labels, borderWidth: value },
+                    }))
+                  }
+                />
+              </div>
+              <Slider
+                label="Corner roundness"
+                min={0}
+                max={24}
+                value={settings.labels.radius}
+                suffix="px"
+                onChange={(value) =>
+                  setSettings((current) => ({
+                    ...current,
+                    labels: { ...current.labels, radius: value },
+                  }))
+                }
+              />
+              <label className="check-row">
+                <span>
+                  <strong>Show descriptions</strong>
+                  <small>Include each place’s story below its name.</small>
+                </span>
+                <input
+                  type="checkbox"
+                  checked={settings.labels.showDescriptions}
+                  onChange={(event) =>
+                    setSettings((current) => ({
+                      ...current,
+                      labels: {
+                        ...current.labels,
+                        showDescriptions: event.target.checked,
+                      },
+                    }))
+                  }
+                />
+              </label>
+            </SettingGroup>
+            <SettingGroup
+              icon={<ImagePlus />}
+              title="Photograph style"
+              description="Applies one consistent photograph design to the editor, map, and exported image."
+            >
+              <p className="field-help">
+                These settings apply to every photograph. Only crop position and
+                zoom are stored separately for each image.
+              </p>
+              <Slider
+                label="Photo size"
+                min={70}
+                max={220}
+                value={settings.photos.size}
+                suffix="px"
+                onChange={(value) =>
+                  setSettings((current) => ({
+                    ...current,
+                    photos: { ...current.photos, size: value },
+                  }))
+                }
+              />
+              <div className="two-fields">
+                <ColorField
+                  label="Frame color"
+                  value={settings.photos.borderColor}
+                  onChange={(value) =>
+                    setSettings((current) => ({
+                      ...current,
+                      photos: { ...current.photos, borderColor: value },
+                    }))
+                  }
+                />
+                <Slider
+                  label="Frame width"
+                  min={0}
+                  max={12}
+                  value={settings.photos.borderWidth}
+                  suffix="px"
+                  onChange={(value) =>
+                    setSettings((current) => ({
+                      ...current,
+                      photos: { ...current.photos, borderWidth: value },
+                    }))
+                  }
+                />
+              </div>
+              <Slider
+                label="Photo corner roundness"
+                min={0}
+                max={50}
+                value={settings.photos.radius}
+                suffix="%"
+                onChange={(value) =>
+                  setSettings((current) => ({
+                    ...current,
+                    photos: { ...current.photos, radius: value },
+                  }))
+                }
+              />
+            </SettingGroup>
+            <SettingGroup
+              icon={<LocateFixed />}
+              title="Callout placement & connectors"
+              description="Keeps labels and photographs clear of the route and links them to their places."
+            >
+              <p className="field-help">
+                Wayfare searches outward from every place for the nearest free
+                position. It avoids the route, map edges, and other callouts.
+              </p>
+              <div className="two-fields">
+                <ColorField
+                  label="Arrow color"
+                  value={settings.callouts.connectorColor}
+                  onChange={(value) =>
+                    setSettings((current) => ({
+                      ...current,
+                      callouts: { ...current.callouts, connectorColor: value },
+                    }))
+                  }
+                />
+                <Slider
+                  label="Arrow width"
+                  min={1}
+                  max={6}
+                  value={settings.callouts.connectorWidth}
+                  suffix="px"
+                  onChange={(value) =>
+                    setSettings((current) => ({
+                      ...current,
+                      callouts: { ...current.callouts, connectorWidth: value },
+                    }))
+                  }
+                />
+              </div>
+              <label>
+                Arrow style
+                <select
+                  aria-label="Arrow style"
+                  value={settings.callouts.connectorStyle}
+                  onChange={(event) =>
+                    setSettings((current) => ({
+                      ...current,
+                      callouts: {
+                        ...current.callouts,
+                        connectorStyle: event.target
+                          .value as AppSettings["callouts"]["connectorStyle"],
+                      },
+                    }))
+                  }
+                >
+                  <option value="curved">Soft curve</option>
+                  <option value="straight">Straight</option>
+                  <option value="dashed">Dashed</option>
+                </select>
+              </label>
+            </SettingGroup>
+            <SettingGroup
+              icon={<Plus />}
+              title="Add another map"
+              description="Connect any compatible hosted map without changing the source code."
+            >
+              <div className="custom-map-guide">
+                <p>
+                  <strong>MapLibre style JSON</strong> is best for vector maps
+                  and complete themes. Paste a URL such as{" "}
+                  <code>https://tiles.openfreemap.org/styles/liberty</code>.
+                </p>
+                <p>
+                  <strong>Raster XYZ</strong> is for image tiles. Its URL must
+                  contain <code>{"{z}/{x}/{y}"}</code>, for example{" "}
+                  <code>
+                    https://tile.openstreetmap.org/{"{z}/{x}/{y}"}.png
+                  </code>
+                  .
+                </p>
+                <p>
+                  Add the provider’s required attribution. If the URL contains
+                  an API key, it will be visible to visitors and saved in this
+                  browser—restrict it to your website’s domain.
+                </p>
+              </div>
+              <div className="two-fields">
+                <label>
+                  Name
+                  <input
+                    value={newMap.name}
+                    onChange={(event) =>
+                      setNewMap((current) => ({
+                        ...current,
+                        name: event.target.value,
+                      }))
+                    }
+                    placeholder="My outdoor map"
+                  />
+                </label>
+                <label>
+                  Source type
+                  <select
+                    value={newMap.kind}
+                    onChange={(event) =>
+                      setNewMap((current) => ({
+                        ...current,
+                        kind: event.target.value as MapSourceKind,
+                      }))
+                    }
+                  >
+                    <option value="style">MapLibre style JSON</option>
+                    <option value="raster">Raster XYZ tiles</option>
+                  </select>
+                </label>
+              </div>
+              <label>
+                Map URL
+                <input
+                  value={newMap.url}
+                  onChange={(event) =>
+                    setNewMap((current) => ({
+                      ...current,
+                      url: event.target.value,
+                    }))
+                  }
+                  placeholder={
+                    newMap.kind === "style"
+                      ? "https://…/style.json"
+                      : "https://…/{z}/{x}/{y}.png"
+                  }
+                />
+              </label>
+              <label>
+                Attribution
+                <input
+                  value={newMap.attribution}
+                  onChange={(event) =>
+                    setNewMap((current) => ({
+                      ...current,
+                      attribution: event.target.value,
+                    }))
+                  }
+                  placeholder="© Provider © OpenStreetMap contributors"
+                />
+              </label>
+              <button className="button dark" onClick={addCustomMap}>
+                Add and select map
+              </button>
+              {!!settings.customMaps.length && (
+                <div className="custom-map-list">
+                  {settings.customMaps.map((map) => (
+                    <div key={map.id}>
+                      <span>
+                        <strong>{map.name}</strong>
+                        <small>
+                          {map.kind === "style"
+                            ? "Vector style"
+                            : "Raster tiles"}
+                        </small>
+                      </span>
+                      <button
+                        className="icon-button danger"
+                        onClick={() =>
+                          setSettings((current) => ({
+                            ...current,
+                            mapStyle:
+                              current.mapStyle === map.id
+                                ? defaults.mapStyle
+                                : current.mapStyle,
+                            customMaps: current.customMaps.filter(
+                              (entry) => entry.id !== map.id,
+                            ),
+                          }))
+                        }
+                        aria-label={`Remove ${map.name}`}
+                      >
+                        <Trash2 size={15} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
               )}
-            </div>
-          </section>
-        </div>
+            </SettingGroup>
+            <SettingGroup
+              icon={<KeyRound />}
+              title="Optional routing provider"
+              description="OSRM works without a key. Mapbox is an alternative for your own account."
+            >
+              <label>
+                Mapbox public token
+                <input
+                  type="password"
+                  value={settings.mapboxToken}
+                  onChange={(event) =>
+                    setSettings((current) => ({
+                      ...current,
+                      mapboxToken: event.target.value,
+                      provider: event.target.value ? "mapbox" : "osrm",
+                    }))
+                  }
+                  placeholder="pk.ey…"
+                />
+              </label>
+              <p className="field-help">
+                The token is kept only for this browser session. Restrict public
+                frontend tokens by website URL in your provider dashboard.
+              </p>
+            </SettingGroup>
+          </div>
+        </Modal>
+      )}
+
+      {helpOpen && (
+        <Modal
+          title="How Wayfare works"
+          eyebrow="Help"
+          onClose={() => setHelpOpen(false)}
+          wide
+        >
+          <div className="help-grid">
+            <HelpStep number="1" title="Build the sequence">
+              Search for places or import GPX files. Drag cards to reorder them,
+              or choose “Insert” between two items.
+            </HelpStep>
+            <HelpStep number="2" title="Mix places and tracks">
+              A GPX track keeps its recorded shape. Wayfare routes from the
+              previous item to its start and from its end to the next item.
+            </HelpStep>
+            <HelpStep number="3" title="Tell the story">
+              Choose Edit on a place to write its name and description, select a
+              marker, and add a photograph.
+            </HelpStep>
+            <HelpStep number="4" title="Compose photographs">
+              Crop and zoom each image individually. Configure photo size,
+              frame, and rounding once in Photograph style; the same design is
+              used in the editor, map, and image export. Wayfare's geometry
+              engine places callouts near their places while avoiding the route,
+              map edge, and each other. A configurable arrow always links each
+              callout to its exact place.
+            </HelpStep>
+            <HelpStep number="5" title="Style the map">
+              Settings are grouped into background, route, labels, custom maps,
+              and routing. Built-in maps need no key.
+            </HelpStep>
+            <HelpStep number="6" title="Export">
+              Download the finished composition as PNG, JPG, or WebP, or export
+              the complete connected route as GPX.
+            </HelpStep>
+          </div>
+          <div className="help-note">
+            <strong>Privacy</strong>
+            <p>
+              Your journey, settings, descriptions, and resized photographs
+              remain in this browser. Search and routing requests go directly to
+              the selected providers.
+            </p>
+          </div>
+        </Modal>
       )}
 
       {exportOpen && (
-        <div
-          className="modal-backdrop"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setExportOpen(false);
-          }}
+        <Modal
+          title="Export journey"
+          eyebrow="Take it with you"
+          onClose={() => setExportOpen(false)}
         >
-          <section
-            className="modal export-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="export-title"
-          >
-            <div className="modal-title">
-              <div>
-                <p className="eyebrow">Take it with you</p>
-                <h2 id="export-title">Export journey</h2>
-              </div>
+          <div className="export-grid">
+            {(["png", "jpeg", "webp"] as const).map((format) => (
               <button
-                className="icon-button"
-                onClick={() => setExportOpen(false)}
-                aria-label="Close export"
-              >
-                <X />
-              </button>
-            </div>
-            <div className="export-grid">
-              {(["png", "jpeg", "webp"] as const).map((format) => (
-                <button
-                  key={format}
-                  onClick={() => {
-                    mapRef.current?.exportImage(format);
-                    setExportOpen(false);
-                  }}
-                >
-                  <ImageDown size={20} />
-                  <span>
-                    <strong>
-                      {format === "jpeg" ? "JPG" : format.toUpperCase()}
-                    </strong>
-                    <small>
-                      {format === "png"
-                        ? "Best quality"
-                        : format === "jpeg"
-                          ? "Small & universal"
-                          : "Smallest file"}
-                    </small>
-                  </span>
-                </button>
-              ))}
-              <button
+                key={format}
                 onClick={() => {
-                  downloadText(
-                    "journey.gpx",
-                    buildGpx(places, route),
-                    "application/gpx+xml",
-                  );
+                  mapRef.current?.exportImage(format);
                   setExportOpen(false);
                 }}
               >
-                <Route size={20} />
+                <ImageDown size={20} />
                 <span>
-                  <strong>GPX</strong>
-                  <small>For GPS apps</small>
+                  <strong>
+                    {format === "jpeg" ? "JPG" : format.toUpperCase()}
+                  </strong>
+                  <small>
+                    {format === "png"
+                      ? "Best quality"
+                      : format === "jpeg"
+                        ? "Small & universal"
+                        : "Smallest file"}
+                  </small>
                 </span>
               </button>
-            </div>
-            <p className="export-note">
-              Exports include the current map style, route, and visible markers.
-              Map data © OpenStreetMap contributors.
-            </p>
-          </section>
-        </div>
+            ))}
+            <button
+              onClick={() => {
+                downloadText(
+                  "journey.gpx",
+                  buildGpx(items, route),
+                  "application/gpx+xml",
+                );
+                setExportOpen(false);
+              }}
+            >
+              <Route size={20} />
+              <span>
+                <strong>GPX</strong>
+                <small>Complete connected route</small>
+              </span>
+            </button>
+          </div>
+          <p className="export-note">
+            Image exports include the current map, route, labels, photographs,
+            and frames.
+          </p>
+        </Modal>
       )}
     </main>
+  );
+}
+
+function Modal({
+  title,
+  eyebrow,
+  onClose,
+  wide,
+  children,
+}: {
+  title: string;
+  eyebrow: string;
+  onClose: () => void;
+  wide?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      className="modal-backdrop"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <section
+        className={`modal ${wide ? "modal-wide" : ""}`}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+      >
+        <div className="modal-title">
+          <div>
+            <p className="eyebrow">{eyebrow}</p>
+            <h2>{title}</h2>
+          </div>
+          <button
+            className="icon-button"
+            onClick={onClose}
+            aria-label={`Close ${title}`}
+          >
+            <X />
+          </button>
+        </div>
+        {children}
+      </section>
+    </div>
+  );
+}
+
+function SettingGroup({
+  icon,
+  title,
+  description,
+  open,
+  children,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  description: string;
+  open?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <details className="setting-group" open={open}>
+      <summary>
+        <span className="setting-icon">{icon}</span>
+        <span>
+          <strong>{title}</strong>
+          <small>{description}</small>
+        </span>
+        <ChevronDown className="chevron" />
+      </summary>
+      <div className="setting-content">{children}</div>
+    </details>
+  );
+}
+
+function Slider({
+  label,
+  value,
+  min,
+  max,
+  step = 1,
+  suffix = "",
+  onChange,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step?: number;
+  suffix?: string;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <label className="slider-field">
+      <span>
+        {label}
+        <output>
+          {value}
+          {suffix}
+        </output>
+      </span>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(event) => onChange(Number(event.target.value))}
+      />
+    </label>
+  );
+}
+
+function ColorField({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="color-field">
+      <span>{label}</span>
+      <input
+        type="color"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </label>
+  );
+}
+
+function HelpStep({
+  number,
+  title,
+  children,
+}: {
+  number: string;
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <article className="help-step">
+      <span>{number}</span>
+      <div>
+        <h3>{title}</h3>
+        <p>{children}</p>
+      </div>
+    </article>
   );
 }

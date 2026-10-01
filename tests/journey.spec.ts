@@ -12,6 +12,17 @@ const graz = {
   lat: "47.0707",
   lon: "15.4395",
 };
+const emptyStyle = {
+  version: 8,
+  sources: {},
+  layers: [
+    {
+      id: "background",
+      type: "background",
+      paint: { "background-color": "#ece8df" },
+    },
+  ],
+};
 
 async function mockApis(page: Page) {
   await page.route("**/nominatim.openstreetmap.org/search**", async (route) => {
@@ -38,7 +49,16 @@ async function mockApis(page: Page) {
       },
     }),
   );
+  await page.route("**/tiles.openfreemap.org/styles/**", (route) =>
+    route.fulfill({ json: emptyStyle }),
+  );
   await page.route("**/*.png", (route) => route.abort());
+}
+
+async function addPlace(page: Page, name: string) {
+  await page.getByLabel("Search for a place").fill(name);
+  await page.getByRole("option", { name: new RegExp(name) }).click();
+  await page.getByRole("button", { name: "Close Place details" }).click();
 }
 
 test.beforeEach(async ({ page }) => {
@@ -46,46 +66,106 @@ test.beforeEach(async ({ page }) => {
   await page.goto("/");
 });
 
-test("adds, edits, inserts and removes journey stops", async ({ page }) => {
-  const search = page.getByLabel("Search for a place");
-  await search.fill("Vienna");
-  await page.getByRole("option", { name: /Vienna/ }).click();
-  await search.fill("Graz");
-  await page.getByRole("option", { name: /Graz/ }).click();
+test("adds, edits, reorders and removes places", async ({ page }) => {
+  await addPlace(page, "Vienna");
+  await addPlace(page, "Graz");
   await expect(page.getByText("199 km")).toBeVisible();
-  await page.getByLabel("Marker style for Vienna").selectOption("dot");
-  await page.getByLabel("Name for stop 1").fill("Wien");
+  await page.getByRole("button", { name: "Edit" }).first().click();
+  await page.getByLabel("Description").fill("First coffee of the journey");
+  await page.getByLabel("Map marker").selectOption("dot");
+  await page.getByRole("button", { name: "Close Place details" }).click();
+  await expect(page.getByText("First coffee of the journey")).toBeVisible();
   await page.getByRole("button", { name: "Delete Graz" }).click();
-  await expect(page.getByLabel("Name for stop 1")).toHaveValue("Wien");
+  await expect(page.getByText("Graz", { exact: true })).not.toBeVisible();
 });
 
-test("changes styling, manual zoom and enables optional provider", async ({
+test("imports a GPX track and connects it in the journey sequence", async ({
+  page,
+}) => {
+  await addPlace(page, "Vienna");
+  await page.getByLabel("Import GPX track").setInputFiles({
+    name: "morning-walk.gpx",
+    mimeType: "application/gpx+xml",
+    buffer: Buffer.from(
+      '<?xml version="1.0"?><gpx><trk><name>Morning walk</name><trkseg><trkpt lat="48.20" lon="16.37"/><trkpt lat="48.21" lon="16.38"/></trkseg></trk></gpx>',
+    ),
+  });
+  await expect(page.getByDisplayValue("Morning walk")).toBeVisible();
+  await expect(page.getByText(/2 GPX points/)).toBeVisible();
+  await expect(
+    page.getByText("Tracks").locator("..").getByText("1"),
+  ).toBeVisible();
+});
+
+test("adds and styles a place photograph", async ({ page }) => {
+  await page.getByLabel("Search for a place").fill("Vienna");
+  await page.getByRole("option", { name: /Vienna/ }).click();
+  await page.locator('.upload-zone input[type="file"]').setInputFiles({
+    name: "vienna.png",
+    mimeType: "image/png",
+    buffer: Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zl1sAAAAASUVORK5CYII=",
+      "base64",
+    ),
+  });
+  await expect(page.locator(".photo-preview")).toBeVisible();
+  await page.getByRole("button", { name: "Close Edit Vienna" }).click();
+  await page.getByRole("button", { name: "Open settings" }).click();
+  await page.getByText("Photograph style").click();
+  await page
+    .getByText("Photo corner roundness")
+    .locator("..")
+    .getByRole("slider")
+    .fill("40");
+  await page.getByRole("button", { name: "Close Settings" }).click();
+  await page.getByRole("button", { name: "Edit Vienna" }).click();
+  await expect(page.locator(".photo-preview")).toHaveCSS(
+    "border-radius",
+    "40%",
+  );
+});
+
+test("groups settings, changes labels and accepts a custom map", async ({
   page,
 }) => {
   await page.getByRole("button", { name: "Open settings" }).click();
+  await expect(page.getByText("Map background")).toBeVisible();
+  await page.getByText("Place labels").click();
   await page
-    .getByText("Automatically fit journey")
+    .getByText("Show descriptions")
     .locator("..")
     .getByRole("checkbox")
     .uncheck();
-  await expect(page.getByText("Zoom level")).toBeVisible();
-  await page.getByLabel("Mapbox access token").fill("pk.test-token");
-  await expect(page.getByText("Mapbox routing enabled")).toBeVisible();
+  await page.getByText("Callout placement & connectors").click();
+  await page.getByLabel("Arrow style").selectOption("dashed");
+  await expect(page.getByLabel("Arrow style")).toHaveValue("dashed");
+  await page.getByText("Add another map").click();
+  await page.getByLabel("Name").fill("My local tiles");
+  await page.getByLabel("Source type").selectOption("raster");
+  await page.getByLabel("Map URL").fill("https://example.test/{z}/{x}/{y}.png");
+  await page.getByRole("button", { name: "Add and select map" }).click();
+  await expect(page.getByText("My local tiles", { exact: true })).toBeVisible();
 });
 
-test("opens export choices after a place is added", async ({ page }) => {
-  await page.getByLabel("Search for a place").fill("Vienna");
-  await page.getByRole("option", { name: /Vienna/ }).click();
-  await page.getByRole("button", { name: "Export" }).click();
+test("explains the workflow and offers every export format", async ({
+  page,
+}) => {
+  await page.getByRole("button", { name: /Help/ }).click();
   await expect(
-    page.getByRole("heading", { name: "Export journey" }),
+    page.getByRole("heading", { name: "How Wayfare works" }),
   ).toBeVisible();
-  await expect(page.getByRole("button", { name: /GPX/ })).toBeVisible();
+  await expect(page.getByText("Mix places and tracks")).toBeVisible();
+  await page.getByRole("button", { name: "Close How Wayfare works" }).click();
+  await addPlace(page, "Vienna");
+  await page.getByRole("button", { name: "Export" }).click();
+  for (const format of ["PNG", "JPG", "WEBP", "GPX"])
+    await expect(
+      page.getByRole("button", { name: new RegExp(format) }),
+    ).toBeVisible();
 });
 
-test("keeps the journey after reload", async ({ page }) => {
-  await page.getByLabel("Search for a place").fill("Vienna");
-  await page.getByRole("option", { name: /Vienna/ }).click();
+test("persists the full journey in browser storage", async ({ page }) => {
+  await addPlace(page, "Vienna");
   await page.reload();
-  await expect(page.getByLabel("Name for stop 1")).toHaveValue("Vienna");
+  await expect(page.getByDisplayValue("Vienna")).toBeVisible();
 });

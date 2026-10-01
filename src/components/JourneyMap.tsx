@@ -4,247 +4,757 @@ import maplibregl, {
   type StyleSpecification,
 } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import type { MapStyleId, Place, RouteGeometry } from "../types";
+import type {
+  CalloutStyle,
+  LabelStyle,
+  MapSource,
+  PhotoAppearance,
+  Place,
+  RouteGeometry,
+} from "../types";
+import {
+  connectorPath,
+  layoutCallouts as computeCalloutLayout,
+  type CalloutPlacement,
+} from "../lib/callout-layout";
 
 export interface JourneyMapHandle {
   exportImage: (format: "png" | "jpeg" | "webp") => void;
   fit: () => void;
 }
 
-const tiles: Record<
-  MapStyleId,
-  { url: string; attribution: string; background: string }
-> = {
-  atlas: {
-    url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
-    attribution: "© OpenStreetMap contributors",
-    background: "#d9e6e2",
-  },
-  paper: {
-    url: "https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png",
-    attribution: "© OpenStreetMap © CARTO",
-    background: "#f6f3eb",
-  },
-  midnight: {
-    url: "https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png",
-    attribution: "© OpenStreetMap © CARTO",
-    background: "#151d24",
-  },
-};
-
-const styleFor = (id: MapStyleId): StyleSpecification => ({
-  version: 8,
-  sources: {
-    base: {
-      type: "raster",
-      tiles: [tiles[id].url],
-      tileSize: id === "atlas" ? 256 : 256,
-      attribution: tiles[id].attribution,
-    },
-  },
-  layers: [
-    {
-      id: "background",
-      type: "background",
-      paint: { "background-color": tiles[id].background },
-    },
-    {
-      id: "base",
-      type: "raster",
-      source: "base",
-      paint: {
-        "raster-saturation": id === "atlas" ? -0.25 : -0.45,
-        "raster-opacity": 0.96,
-      },
-    },
-  ],
-});
+interface Props {
+  places: Place[];
+  route: RouteGeometry;
+  mapSource: MapSource;
+  routeColor: string;
+  routeWidth: number;
+  autoFit: boolean;
+  zoom: number;
+  labels: LabelStyle;
+  photos: PhotoAppearance;
+  callouts: CalloutStyle;
+}
 
 const emptyCollection = { type: "FeatureCollection" as const, features: [] };
 
-export const JourneyMap = forwardRef<
-  JourneyMapHandle,
-  {
-    places: Place[];
-    route: RouteGeometry;
-    mapStyle: MapStyleId;
-    routeColor: string;
-    routeWidth: number;
-    autoFit: boolean;
-    zoom: number;
-  }
->(({ places, route, mapStyle, routeColor, routeWidth, autoFit, zoom }, ref) => {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const mapRef = useRef<MapLibreMap | null>(null);
-  const readyRef = useRef(false);
-
-  const fit = () => {
-    const map = mapRef.current;
-    if (!map || places.length === 0) return;
-    if (places.length === 1)
-      map.easeTo({ center: [places[0].lng, places[0].lat], zoom: 10 });
-    else {
-      const bounds = places.reduce(
-        (box, place) => box.extend([place.lng, place.lat]),
-        new maplibregl.LngLatBounds(
-          [places[0].lng, places[0].lat],
-          [places[0].lng, places[0].lat],
-        ),
-      );
-      map.fitBounds(bounds, { padding: 84, maxZoom: 13, duration: 700 });
-    }
+const styleFor = (source: MapSource): string | StyleSpecification => {
+  if (source.kind === "style") return source.url;
+  return {
+    version: 8,
+    sources: {
+      base: {
+        type: "raster",
+        tiles: [source.url],
+        tileSize: 256,
+        maxzoom: source.maxZoom ?? 19,
+        attribution: source.attribution,
+      },
+    },
+    layers: [
+      {
+        id: "background",
+        type: "background",
+        paint: { "background-color": "#e8e4db" },
+      },
+      { id: "base", type: "raster", source: "base" },
+    ],
   };
+};
 
-  const draw = () => {
-    const map = mapRef.current;
-    if (!map || !readyRef.current) return;
-    const routeSource = map.getSource("journey-route") as
-      maplibregl.GeoJSONSource | undefined;
-    const placeSource = map.getSource("journey-places") as
-      maplibregl.GeoJSONSource | undefined;
-    routeSource?.setData(
-      route.coordinates.length > 1
-        ? {
-            type: "Feature",
-            properties: {},
-            geometry: { type: "LineString", coordinates: route.coordinates },
-          }
-        : emptyCollection,
-    );
-    placeSource?.setData({
-      type: "FeatureCollection",
-      features: places
-        .filter((p) => p.marker !== "route")
-        .map((place, index) => ({
-          type: "Feature",
-          properties: { index: index + 1, kind: place.marker },
-          geometry: { type: "Point", coordinates: [place.lng, place.lat] },
-        })),
-    });
-    if (map.getLayer("journey-line"))
-      map.setPaintProperty("journey-line", "line-color", routeColor);
-    if (map.getLayer("journey-line"))
-      map.setPaintProperty("journey-line", "line-width", routeWidth);
-  };
+const loadImage = (source: string) =>
+  new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = reject;
+    image.src = source;
+  });
 
-  const addJourneyLayers = () => {
-    const map = mapRef.current;
-    if (!map || map.getSource("journey-route")) return;
-    map.addSource("journey-route", { type: "geojson", data: emptyCollection });
-    map.addLayer({
-      id: "journey-shadow",
-      type: "line",
-      source: "journey-route",
-      layout: { "line-cap": "round", "line-join": "round" },
-      paint: {
-        "line-color": "#ffffff",
-        "line-opacity": 0.75,
-        "line-width": routeWidth + 5,
-      },
-    });
-    map.addLayer({
-      id: "journey-line",
-      type: "line",
-      source: "journey-route",
-      layout: { "line-cap": "round", "line-join": "round" },
-      paint: { "line-color": routeColor, "line-width": routeWidth },
-    });
-    map.addSource("journey-places", { type: "geojson", data: emptyCollection });
-    map.addLayer({
-      id: "journey-pins",
-      type: "circle",
-      source: "journey-places",
-      filter: ["==", ["get", "kind"], "pin"],
-      paint: {
-        "circle-color": "#fffaf0",
-        "circle-radius": 13,
-        "circle-stroke-color": routeColor,
-        "circle-stroke-width": 4,
-      },
-    });
-    map.addLayer({
-      id: "journey-dots",
-      type: "circle",
-      source: "journey-places",
-      filter: ["==", ["get", "kind"], "dot"],
-      paint: {
-        "circle-color": routeColor,
-        "circle-radius": 6,
-        "circle-stroke-color": "#fffaf0",
-        "circle-stroke-width": 2,
-      },
-    });
-    map.addLayer({
-      id: "journey-labels",
-      type: "symbol",
-      source: "journey-places",
-      filter: ["==", ["get", "kind"], "pin"],
-      layout: {
-        "text-field": ["to-string", ["get", "index"]],
-        "text-size": 12,
-      },
-      paint: { "text-color": routeColor },
-    });
-    readyRef.current = true;
-    draw();
-  };
+const svgNamespace = "http://www.w3.org/2000/svg";
+function drawConnectors(
+  svg: SVGSVGElement,
+  placements: CalloutPlacement[],
+  style: CalloutStyle,
+) {
+  svg.replaceChildren();
+  svg.setAttribute("viewBox", `0 0 ${svg.clientWidth} ${svg.clientHeight}`);
+  const definitions = document.createElementNS(svgNamespace, "defs");
+  const marker = document.createElementNS(svgNamespace, "marker");
+  marker.setAttribute("id", "callout-arrowhead");
+  marker.setAttribute("viewBox", "0 0 10 10");
+  marker.setAttribute("refX", "9");
+  marker.setAttribute("refY", "5");
+  marker.setAttribute("markerWidth", "5");
+  marker.setAttribute("markerHeight", "5");
+  marker.setAttribute("orient", "auto-start-reverse");
+  const tip = document.createElementNS(svgNamespace, "path");
+  tip.setAttribute("d", "M 0 1 L 10 5 L 0 9 z");
+  tip.setAttribute("fill", style.connectorColor);
+  marker.append(tip);
+  definitions.append(marker);
+  svg.append(definitions);
+  placements.forEach((placement) => {
+    const path = document.createElementNS(svgNamespace, "path");
+    path.setAttribute(
+      "d",
+      connectorPath(
+        placement.connectorStart,
+        placement.connectorEnd,
+        style.connectorStyle === "curved",
+      ),
+    );
+    path.setAttribute("fill", "none");
+    path.setAttribute("stroke", style.connectorColor);
+    path.setAttribute("stroke-width", String(style.connectorWidth));
+    path.setAttribute("stroke-linecap", "round");
+    if (style.connectorStyle === "dashed")
+      path.setAttribute("stroke-dasharray", "7 6");
+    path.setAttribute("marker-end", "url(#callout-arrowhead)");
+    svg.append(path);
+  });
+}
 
-  useEffect(() => {
-    if (!containerRef.current || mapRef.current) return;
-    const map = new maplibregl.Map({
-      container: containerRef.current,
-      style: styleFor(mapStyle),
-      center: [13.4, 47.6],
-      zoom: 4.6,
-      attributionControl: false,
-      canvasContextAttributes: { preserveDrawingBuffer: true },
+function drawCanvasConnector(
+  context: CanvasRenderingContext2D,
+  placement: CalloutPlacement,
+  style: CalloutStyle,
+  scale: number,
+) {
+  const { connectorStart: start, connectorEnd: end } = placement;
+  context.save();
+  context.strokeStyle = style.connectorColor;
+  context.fillStyle = style.connectorColor;
+  context.lineWidth = style.connectorWidth * scale;
+  context.lineCap = "round";
+  if (style.connectorStyle === "dashed")
+    context.setLineDash([7 * scale, 6 * scale]);
+  context.beginPath();
+  context.moveTo(start.x, start.y);
+  if (style.connectorStyle === "curved") {
+    const dx = end.x - start.x,
+      dy = end.y - start.y,
+      length = Math.max(1, Math.hypot(dx, dy));
+    const bend = Math.min(24 * scale, length * 0.18);
+    context.quadraticCurveTo(
+      (start.x + end.x) / 2 - (dy / length) * bend,
+      (start.y + end.y) / 2 + (dx / length) * bend,
+      end.x,
+      end.y,
+    );
+  } else context.lineTo(end.x, end.y);
+  context.stroke();
+  const angle = Math.atan2(end.y - start.y, end.x - start.x);
+  const size = 7 * scale;
+  context.setLineDash([]);
+  context.beginPath();
+  context.moveTo(end.x, end.y);
+  context.lineTo(
+    end.x - Math.cos(angle - 0.5) * size,
+    end.y - Math.sin(angle - 0.5) * size,
+  );
+  context.lineTo(
+    end.x - Math.cos(angle + 0.5) * size,
+    end.y - Math.sin(angle + 0.5) * size,
+  );
+  context.closePath();
+  context.fill();
+  context.restore();
+}
+
+export const JourneyMap = forwardRef<JourneyMapHandle, Props>(
+  (
+    {
+      places,
+      route,
+      mapSource,
+      routeColor,
+      routeWidth,
+      autoFit,
+      zoom,
+      labels,
+      photos,
+      callouts,
+    },
+    ref,
+  ) => {
+    const containerRef = useRef<HTMLDivElement>(null);
+    const calloutLayerRef = useRef<HTMLDivElement>(null);
+    const connectorRef = useRef<SVGSVGElement>(null);
+    const mapRef = useRef<MapLibreMap | null>(null);
+    const readyRef = useRef(false);
+    const calloutEntriesRef = useRef<
+      Array<{ element: HTMLDivElement; lngLat: [number, number] }>
+    >([]);
+    const pinMarkersRef = useRef<maplibregl.Marker[]>([]);
+    const styleKeyRef = useRef(`${mapSource.kind}:${mapSource.url}`);
+    const latestRef = useRef({
+      places,
+      route,
+      routeColor,
+      routeWidth,
+      labels,
+      photos,
+      callouts,
     });
-    mapRef.current = map;
-    map.addControl(
-      new maplibregl.NavigationControl({ showCompass: false }),
-      "bottom-right",
-    );
-    map.addControl(
-      new maplibregl.AttributionControl({ compact: true }),
-      "bottom-left",
-    );
-    map.on("load", addJourneyLayers);
-    return () => {
-      map.remove();
-      mapRef.current = null;
+    latestRef.current = {
+      places,
+      route,
+      routeColor,
+      routeWidth,
+      labels,
+      photos,
+      callouts,
     };
-  }, []);
 
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return;
-    readyRef.current = false;
-    map.setStyle(styleFor(mapStyle));
-    map.once("style.load", addJourneyLayers);
-  }, [mapStyle]);
+    const fit = () => {
+      const map = mapRef.current;
+      const currentPlaces = latestRef.current.places;
+      const points = [
+        ...latestRef.current.route.coordinates,
+        ...currentPlaces.map(
+          (place) => [place.lng, place.lat] as [number, number],
+        ),
+      ];
+      if (!map || points.length === 0) return;
+      if (points.length === 1) map.easeTo({ center: points[0], zoom: 10 });
+      else {
+        const bounds = points
+          .slice(1)
+          .reduce(
+            (box, coordinate) => box.extend(coordinate),
+            new maplibregl.LngLatBounds(points[0], points[0]),
+          );
+        map.fitBounds(bounds, {
+          padding: { top: 150, right: 90, bottom: 90, left: 90 },
+          maxZoom: 13,
+          duration: 650,
+        });
+      }
+    };
 
-  useEffect(() => {
-    draw();
-    if (autoFit) fit();
-  }, [places, route, routeColor, routeWidth, autoFit]);
-  useEffect(() => {
-    if (!autoFit) mapRef.current?.easeTo({ zoom, duration: 350 });
-  }, [zoom, autoFit]);
+    const layoutCallouts = () => {
+      const map = mapRef.current;
+      const svg = connectorRef.current;
+      if (!map || !svg) return;
+      const routePoints = latestRef.current.route.coordinates.map(
+        (coordinate) => map.project(coordinate),
+      );
+      const items = calloutEntriesRef.current.map((entry, index) => {
+        const anchor = map.project(entry.lngLat);
+        return {
+          id: String(index),
+          anchor,
+          width: entry.element.offsetWidth,
+          height: entry.element.offsetHeight,
+        };
+      });
+      const placements = computeCalloutLayout(items, routePoints, {
+        width: map.getContainer().clientWidth,
+        height: map.getContainer().clientHeight,
+      });
+      placements.forEach((placement, index) => {
+        const element = calloutEntriesRef.current[index].element;
+        element.style.left = `${placement.box.left}px`;
+        element.style.top = `${placement.box.top}px`;
+        element.style.opacity = "1";
+      });
+      drawConnectors(svg, placements, latestRef.current.callouts);
+    };
 
-  useImperativeHandle(ref, () => ({
-    fit,
-    exportImage: (format) => {
+    const renderCallouts = () => {
       const map = mapRef.current;
       if (!map) return;
-      map.once("idle", () => {
+      calloutEntriesRef.current.forEach(({ element }) => element.remove());
+      calloutEntriesRef.current = [];
+      pinMarkersRef.current.forEach((marker) => marker.remove());
+      pinMarkersRef.current = [];
+
+      latestRef.current.places.forEach((place, index) => {
+        if (place.marker === "pin") {
+          const number = document.createElement("span");
+          number.className = "pin-number-overlay";
+          number.textContent = String(index + 1);
+          pinMarkersRef.current.push(
+            new maplibregl.Marker({ element: number, anchor: "center" })
+              .setLngLat([place.lng, place.lat])
+              .addTo(map),
+          );
+        }
+        if (!place.name && !place.photo) return;
+        const element = document.createElement("div");
+        element.className = "map-callout";
+        element.style.setProperty(
+          "--label-bg",
+          latestRef.current.labels.backgroundColor,
+        );
+        element.style.setProperty(
+          "--label-color",
+          latestRef.current.labels.textColor,
+        );
+        element.style.setProperty(
+          "--label-border",
+          latestRef.current.labels.borderColor,
+        );
+        element.style.setProperty(
+          "--label-border-width",
+          `${latestRef.current.labels.borderWidth}px`,
+        );
+        element.style.setProperty(
+          "--label-radius",
+          `${latestRef.current.labels.radius}px`,
+        );
+        element.style.setProperty(
+          "--label-size",
+          `${latestRef.current.labels.fontSize}px`,
+        );
+
+        if (place.photo) {
+          const photo = document.createElement("div");
+          photo.className = "callout-photo";
+          photo.style.width = `${latestRef.current.photos.size}px`;
+          photo.style.height = `${latestRef.current.photos.size}px`;
+          photo.style.border = `${latestRef.current.photos.borderWidth}px solid ${latestRef.current.photos.borderColor}`;
+          photo.style.borderRadius = `${latestRef.current.photos.radius}%`;
+          photo.style.backgroundImage = `url("${place.photo.dataUrl}")`;
+          photo.style.backgroundSize = `${place.photo.zoom * 100}%`;
+          photo.style.backgroundPosition = `${place.photo.cropX}% ${place.photo.cropY}%`;
+          element.append(photo);
+        }
+
+        const caption = document.createElement("div");
+        caption.className = "callout-caption";
+        const title = document.createElement("strong");
+        title.textContent = place.name;
+        caption.append(title);
+        if (latestRef.current.labels.showDescriptions && place.description) {
+          const description = document.createElement("span");
+          description.textContent = place.description;
+          caption.append(description);
+        }
+        element.append(caption);
+
+        calloutLayerRef.current?.append(element);
+        calloutEntriesRef.current.push({
+          element,
+          lngLat: [place.lng, place.lat],
+        });
+      });
+
+      requestAnimationFrame(layoutCallouts);
+    };
+
+    const draw = () => {
+      const map = mapRef.current;
+      if (!map || !readyRef.current) return;
+      const current = latestRef.current;
+      (
+        map.getSource("journey-route") as maplibregl.GeoJSONSource | undefined
+      )?.setData(
+        current.route.coordinates.length > 1
+          ? {
+              type: "Feature",
+              properties: {},
+              geometry: {
+                type: "LineString",
+                coordinates: current.route.coordinates,
+              },
+            }
+          : emptyCollection,
+      );
+      (
+        map.getSource("journey-places") as maplibregl.GeoJSONSource | undefined
+      )?.setData({
+        type: "FeatureCollection",
+        features: current.places
+          .filter((place) => place.marker !== "route")
+          .map((place, index) => ({
+            type: "Feature",
+            properties: { index: index + 1, kind: place.marker },
+            geometry: { type: "Point", coordinates: [place.lng, place.lat] },
+          })),
+      });
+      if (map.getLayer("journey-shadow"))
+        map.setPaintProperty(
+          "journey-shadow",
+          "line-width",
+          current.routeWidth + 5,
+        );
+      if (map.getLayer("journey-line")) {
+        map.setPaintProperty("journey-line", "line-color", current.routeColor);
+        map.setPaintProperty("journey-line", "line-width", current.routeWidth);
+      }
+      if (map.getLayer("journey-pins"))
+        map.setPaintProperty(
+          "journey-pins",
+          "circle-color",
+          current.routeColor,
+        );
+      if (map.getLayer("journey-dots"))
+        map.setPaintProperty(
+          "journey-dots",
+          "circle-color",
+          current.routeColor,
+        );
+      renderCallouts();
+    };
+
+    const addJourneyLayers = () => {
+      const map = mapRef.current;
+      if (!map) return;
+      if (!map.isStyleLoaded()) {
+        map.once("idle", addJourneyLayers);
+        return;
+      }
+      if (!map.getSource("journey-route")) {
+        map.addSource("journey-route", {
+          type: "geojson",
+          data: emptyCollection,
+        });
+        map.addLayer({
+          id: "journey-shadow",
+          type: "line",
+          source: "journey-route",
+          layout: { "line-cap": "round", "line-join": "round" },
+          paint: {
+            "line-color": "#ffffff",
+            "line-opacity": 0.76,
+            "line-width": latestRef.current.routeWidth + 5,
+          },
+        });
+        map.addLayer({
+          id: "journey-line",
+          type: "line",
+          source: "journey-route",
+          layout: { "line-cap": "round", "line-join": "round" },
+          paint: {
+            "line-color": latestRef.current.routeColor,
+            "line-width": latestRef.current.routeWidth,
+          },
+        });
+        map.addSource("journey-places", {
+          type: "geojson",
+          data: emptyCollection,
+        });
+        map.addLayer({
+          id: "journey-pins",
+          type: "circle",
+          source: "journey-places",
+          filter: ["==", ["get", "kind"], "pin"],
+          paint: {
+            "circle-color": latestRef.current.routeColor,
+            "circle-radius": 12,
+            "circle-stroke-color": "#fffaf0",
+            "circle-stroke-width": 4,
+          },
+        });
+        map.addLayer({
+          id: "journey-dots",
+          type: "circle",
+          source: "journey-places",
+          filter: ["==", ["get", "kind"], "dot"],
+          paint: {
+            "circle-color": latestRef.current.routeColor,
+            "circle-radius": 6,
+            "circle-stroke-color": "#fffaf0",
+            "circle-stroke-width": 2,
+          },
+        });
+      }
+      readyRef.current = true;
+      draw();
+    };
+
+    useEffect(() => {
+      if (!containerRef.current || mapRef.current) return;
+      const map = new maplibregl.Map({
+        container: containerRef.current,
+        style: styleFor(mapSource),
+        center: [13.4, 47.6],
+        zoom: 4.6,
+        attributionControl: false,
+        canvasContextAttributes: { preserveDrawingBuffer: true },
+      });
+      mapRef.current = map;
+      map.addControl(
+        new maplibregl.NavigationControl({ showCompass: false }),
+        "bottom-right",
+      );
+      map.addControl(
+        new maplibregl.AttributionControl({ compact: true }),
+        "bottom-left",
+      );
+      map.once("load", () => {
+        addJourneyLayers();
+        if (autoFit) fit();
+      });
+      map.on("move", layoutCallouts);
+      map.on("resize", layoutCallouts);
+      map.on("error", (event) => console.warn("Map source error", event.error));
+      return () => {
+        calloutEntriesRef.current.forEach(({ element }) => element.remove());
+        pinMarkersRef.current.forEach((marker) => marker.remove());
+        map.remove();
+        mapRef.current = null;
+      };
+    }, []);
+
+    useEffect(() => {
+      const map = mapRef.current;
+      if (!map) return;
+      const nextStyleKey = `${mapSource.kind}:${mapSource.url}`;
+      if (styleKeyRef.current === nextStyleKey) return;
+      styleKeyRef.current = nextStyleKey;
+      readyRef.current = false;
+      calloutEntriesRef.current.forEach(({ element }) => element.remove());
+      calloutEntriesRef.current = [];
+      pinMarkersRef.current.forEach((marker) => marker.remove());
+      pinMarkersRef.current = [];
+      map.once("style.load", () => {
+        addJourneyLayers();
+        if (autoFit) fit();
+      });
+      map.setStyle(styleFor(mapSource));
+    }, [mapSource.id, mapSource.kind, mapSource.url]);
+
+    useEffect(() => {
+      draw();
+      if (autoFit) fit();
+    }, [
+      places,
+      route,
+      routeColor,
+      routeWidth,
+      autoFit,
+      labels,
+      photos,
+      callouts,
+    ]);
+    useEffect(() => {
+      if (!autoFit) mapRef.current?.easeTo({ zoom, duration: 350 });
+    }, [zoom, autoFit]);
+
+    useImperativeHandle(ref, () => ({
+      fit,
+      exportImage: async (format) => {
+        const map = mapRef.current;
+        if (!map) return;
+        await new Promise<void>((resolve) =>
+          map.loaded() ? resolve() : map.once("idle", () => resolve()),
+        );
+        const base = map.getCanvas();
+        const canvas = document.createElement("canvas");
+        canvas.width = base.width;
+        canvas.height = base.height;
+        const context = canvas.getContext("2d");
+        if (!context) return;
+        context.drawImage(base, 0, 0);
+        const scale = base.width / base.clientWidth;
+
+        const exportItems = latestRef.current.places.flatMap((place, index) => {
+          if (!place.name && !place.photo) return [];
+          const point = map.project([place.lng, place.lat]);
+          const description =
+            latestRef.current.labels.showDescriptions && place.description
+              ? place.description.slice(0, 70)
+              : "";
+          context.font = `600 ${latestRef.current.labels.fontSize * scale}px Manrope, sans-serif`;
+          const labelWidth = Math.min(
+            260 * scale,
+            Math.max(
+              80 * scale,
+              context.measureText(place.name).width + 18 * scale,
+              description
+                ? context.measureText(description).width + 18 * scale
+                : 0,
+            ),
+          );
+          const labelHeight = (description ? 42 : 27) * scale;
+          const photoSize =
+            (place.photo ? latestRef.current.photos.size : 0) * scale;
+          return [
+            {
+              id: String(index),
+              anchor: { x: point.x * scale, y: point.y * scale },
+              width: Math.max(labelWidth, photoSize),
+              height: labelHeight + (place.photo ? photoSize + 6 * scale : 0),
+            },
+          ];
+        });
+        const routePoints = latestRef.current.route.coordinates.map(
+          (coordinate) => {
+            const point = map.project(coordinate);
+            return { x: point.x * scale, y: point.y * scale };
+          },
+        );
+        const exportPlacements = computeCalloutLayout(
+          exportItems,
+          routePoints,
+          { width: canvas.width, height: canvas.height },
+          {
+            padding: 10 * scale,
+            routeClearance: 8 * scale,
+            viewportMargin: 8 * scale,
+            minDistance: 18 * scale,
+            maxDistance: 242 * scale,
+            distanceStep: 32 * scale,
+          },
+        );
+        exportPlacements.forEach((placement) =>
+          drawCanvasConnector(
+            context,
+            placement,
+            latestRef.current.callouts,
+            scale,
+          ),
+        );
+        const placementById = new Map(
+          exportPlacements.map((placement) => [placement.id, placement]),
+        );
+
+        for (const [placeIndex, place] of latestRef.current.places.entries()) {
+          const point = map.project([place.lng, place.lat]);
+          const x = point.x * scale;
+          const y = point.y * scale;
+
+          if (place.marker === "pin") {
+            context.save();
+            context.fillStyle = "#ffffff";
+            context.font = `700 ${12 * scale}px Manrope, sans-serif`;
+            context.textAlign = "center";
+            context.textBaseline = "middle";
+            context.fillText(String(placeIndex + 1), x, y);
+            context.restore();
+          }
+
+          if (!place.name && !place.photo) continue;
+
+          const description =
+            latestRef.current.labels.showDescriptions && place.description
+              ? place.description.slice(0, 70)
+              : "";
+          context.font = `600 ${latestRef.current.labels.fontSize * scale}px Manrope, sans-serif`;
+          const labelWidth = Math.min(
+            260 * scale,
+            Math.max(
+              80 * scale,
+              context.measureText(place.name).width + 18 * scale,
+              description
+                ? context.measureText(description).width + 18 * scale
+                : 0,
+            ),
+          );
+          const labelHeight = (description ? 42 : 27) * scale;
+          const photoSize =
+            (place.photo ? latestRef.current.photos.size : 0) * scale;
+          const calloutWidth = Math.max(labelWidth, photoSize);
+          const calloutHeight =
+            labelHeight + (place.photo ? photoSize + 6 * scale : 0);
+
+          const placement = placementById.get(String(placeIndex));
+          if (!placement) continue;
+          const centerX = (placement.box.left + placement.box.right) / 2;
+          const calloutBottom = placement.box.bottom;
+          const labelTop = calloutBottom - labelHeight;
+
+          if (place.photo) {
+            try {
+              const image = await loadImage(place.photo.dataUrl);
+              const size = photoSize;
+              const photoX = centerX - size / 2;
+              const photoY = labelTop - 6 * scale - size;
+              context.save();
+              const radius =
+                ((latestRef.current.photos.radius / 100) * size) / 2;
+              context.beginPath();
+              context.roundRect(photoX, photoY, size, size, radius);
+              context.clip();
+              const imageRatio = image.width / image.height;
+              const zoomed = place.photo.zoom;
+              let sourceWidth = image.width / zoomed;
+              let sourceHeight = image.height / zoomed;
+              if (imageRatio > 1) sourceWidth = sourceHeight;
+              else sourceHeight = sourceWidth;
+              const sx =
+                ((image.width - sourceWidth) * place.photo.cropX) / 100;
+              const sy =
+                ((image.height - sourceHeight) * place.photo.cropY) / 100;
+              context.drawImage(
+                image,
+                sx,
+                sy,
+                sourceWidth,
+                sourceHeight,
+                photoX,
+                photoY,
+                size,
+                size,
+              );
+              context.restore();
+              context.strokeStyle = latestRef.current.photos.borderColor;
+              context.lineWidth = latestRef.current.photos.borderWidth * scale;
+              context.beginPath();
+              context.roundRect(photoX, photoY, size, size, radius);
+              context.stroke();
+            } catch {
+              /* A broken local image should not block the map export. */
+            }
+          }
+          if (place.name) {
+            context.font = `600 ${latestRef.current.labels.fontSize * scale}px Manrope, sans-serif`;
+            context.fillStyle = latestRef.current.labels.backgroundColor;
+            context.strokeStyle = latestRef.current.labels.borderColor;
+            context.lineWidth = latestRef.current.labels.borderWidth * scale;
+            context.beginPath();
+            context.roundRect(
+              centerX - labelWidth / 2,
+              labelTop,
+              labelWidth,
+              labelHeight,
+              latestRef.current.labels.radius * scale,
+            );
+            context.fill();
+            context.stroke();
+            context.textAlign = "center";
+            context.fillStyle = latestRef.current.labels.textColor;
+            context.fillText(
+              place.name,
+              centerX,
+              calloutBottom - (description ? 23 : 9) * scale,
+            );
+            if (description) {
+              context.font = `400 ${Math.max(10, latestRef.current.labels.fontSize - 2) * scale}px Manrope, sans-serif`;
+              context.fillText(
+                description,
+                centerX,
+                calloutBottom - 7 * scale,
+                labelWidth - 12 * scale,
+              );
+            }
+          }
+        }
         const anchor = document.createElement("a");
         anchor.download = `journey-map.${format === "jpeg" ? "jpg" : format}`;
-        anchor.href = map.getCanvas().toDataURL(`image/${format}`, 0.94);
+        anchor.href = canvas.toDataURL(`image/${format}`, 0.94);
         anchor.click();
-      });
-      map.triggerRepaint();
-    },
-  }));
+      },
+    }));
 
-  return <div ref={containerRef} className="map-canvas" data-testid="map" />;
-});
+    return (
+      <div className="map-stage">
+        <div ref={containerRef} className="map-canvas" data-testid="map" />
+        <svg
+          ref={connectorRef}
+          className="callout-connectors"
+          aria-hidden="true"
+        />
+        <div
+          ref={calloutLayerRef}
+          className="callout-layer"
+          aria-hidden="true"
+        />
+      </div>
+    );
+  },
+);
+
+JourneyMap.displayName = "JourneyMap";
