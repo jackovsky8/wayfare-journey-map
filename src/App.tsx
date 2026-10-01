@@ -747,6 +747,7 @@ export function App() {
             <label>
               Map marker
               <select
+                aria-label="Place marker type"
                 value={activePlace.marker}
                 onChange={(event) =>
                   updatePlace(activePlace.id, {
@@ -911,6 +912,7 @@ export function App() {
                   <small>Keep all journey items inside the map frame.</small>
                 </span>
                 <input
+                  aria-label="Show place descriptions"
                   type="checkbox"
                   checked={settings.autoFit}
                   onChange={(event) =>

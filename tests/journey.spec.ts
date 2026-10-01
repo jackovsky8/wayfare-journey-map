@@ -72,7 +72,7 @@ test("adds, edits, reorders and removes places", async ({ page }) => {
   await expect(page.getByText("199 km")).toBeVisible();
   await page.getByRole("button", { name: "Edit" }).first().click();
   await page.getByLabel("Description").fill("First coffee of the journey");
-  await page.getByLabel("Map marker", { exact: true }).selectOption("dot");
+  await page.getByLabel("Place marker type").selectOption("dot");
   await page.getByRole("button", { name: "Close Place details" }).click();
   await expect(page.getByText("First coffee of the journey")).toBeVisible();
   await page.getByRole("button", { name: "Delete Graz" }).click();
@@ -131,11 +131,7 @@ test("groups settings, changes labels and accepts a custom map", async ({
   await page.getByRole("button", { name: "Open settings" }).click();
   await expect(page.getByText("Map background")).toBeVisible();
   await page.getByText("Place labels", { exact: true }).click();
-  await page
-    .getByText("Show descriptions")
-    .locator("..")
-    .getByRole("checkbox")
-    .uncheck();
+  await page.getByLabel("Show place descriptions").uncheck();
   await page
     .getByText("Callout placement & connectors", { exact: true })
     .click();
