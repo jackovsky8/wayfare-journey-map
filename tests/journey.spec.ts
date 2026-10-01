@@ -74,7 +74,11 @@ test("adds, edits, reorders and removes places", async ({ page }) => {
   await page.getByLabel("Description").fill("First coffee of the journey");
   await page.getByLabel("Place marker type").selectOption("dot");
   await page.getByRole("button", { name: "Close Place details" }).click();
-  await expect(page.getByText("First coffee of the journey")).toBeVisible();
+  await expect(
+    page
+      .locator('[aria-label="Journey items"]')
+      .getByText("First coffee of the journey", { exact: true }),
+  ).toBeVisible();
   await page.getByRole("button", { name: "Delete Graz" }).click();
   await expect(page.getByText("Graz", { exact: true })).not.toBeVisible();
 });
@@ -111,7 +115,7 @@ test("adds and styles a place photograph", async ({ page }) => {
   await expect(page.locator(".photo-preview")).toBeVisible();
   await page.getByRole("button", { name: "Close Place details" }).click();
   await page.getByRole("button", { name: "Open settings" }).click();
-  await page.getByText("Photograph style", { exact: true }).click();
+  await page.locator('summary[aria-label="Photograph style"]').click();
   await page
     .getByText("Photo corner roundness")
     .locator("..")
@@ -130,14 +134,14 @@ test("groups settings, changes labels and accepts a custom map", async ({
 }) => {
   await page.getByRole("button", { name: "Open settings" }).click();
   await expect(page.getByText("Map background")).toBeVisible();
-  await page.getByText("Place labels", { exact: true }).click();
+  await page.locator('summary[aria-label="Place labels"]').click();
   await page.getByLabel("Show place descriptions").uncheck();
   await page
-    .getByText("Callout placement & connectors", { exact: true })
+    .locator('summary[aria-label="Callout placement & connectors"]')
     .click();
   await page.getByLabel("Arrow style").selectOption("dashed");
   await expect(page.getByLabel("Arrow style")).toHaveValue("dashed");
-  await page.getByText("Add another map", { exact: true }).click();
+  await page.locator('summary[aria-label="Add another map"]').click();
   await page.getByLabel("Name").fill("My local tiles");
   await page.getByLabel("Source type").selectOption("raster");
   await page.getByLabel("Map URL").fill("https://example.test/{z}/{x}/{y}.png");
@@ -150,7 +154,7 @@ test("groups settings, changes labels and accepts a custom map", async ({
 test("explains the workflow and offers every export format", async ({
   page,
 }) => {
-  await page.getByRole("button", { name: /Help/ }).click();
+  await page.getByRole("button", { name: "Help", exact: true }).click();
   await expect(
     page.getByRole("heading", { name: "How Wayfare works" }),
   ).toBeVisible();

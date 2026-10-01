@@ -440,7 +440,11 @@ export function App() {
           <span>Wayfare</span>
         </div>
         <div className="top-actions">
-          <button className="button ghost" onClick={() => setHelpOpen(true)}>
+          <button
+            className="button ghost"
+            onClick={() => setHelpOpen(true)}
+            aria-label="Help"
+          >
             <BookOpen size={17} />
             <span>Help</span>
           </button>
@@ -1496,7 +1500,7 @@ function SettingGroup({
 }) {
   return (
     <details className="setting-group" open={open}>
-      <summary>
+      <summary aria-label={title}>
         <span className="setting-icon">{icon}</span>
         <span>
           <strong>{title}</strong>
