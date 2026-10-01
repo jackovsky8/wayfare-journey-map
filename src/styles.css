@@ -965,7 +965,7 @@ h2 {
 }
 
 .section-heading small,
-.setting-group summary small,
+.setting-summary small,
 .check-row small {
   color: #777d74;
   font-size: 12px;
@@ -1063,21 +1063,21 @@ h2 {
   background: #fff;
 }
 
-.setting-group summary {
+.setting-summary {
+  width: 100%;
   display: grid;
   grid-template-columns: 34px minmax(0, 1fr) 20px;
   align-items: center;
   gap: 10px;
   padding: 14px;
   cursor: pointer;
-  list-style: none;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
 }
 
-.setting-group summary::-webkit-details-marker {
-  display: none;
-}
-
-.setting-group summary > span:nth-child(2) {
+.setting-summary > span:nth-child(2) {
   display: grid;
   gap: 2px;
 }
@@ -1100,7 +1100,7 @@ h2 {
   transition: transform 0.2s;
 }
 
-.setting-group[open] .chevron {
+.setting-group.is-open .chevron {
   transform: rotate(180deg);
 }
 

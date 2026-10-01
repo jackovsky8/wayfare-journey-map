@@ -115,7 +115,7 @@ test("adds and styles a place photograph", async ({ page }) => {
   await expect(page.locator(".photo-preview")).toBeVisible();
   await page.getByRole("button", { name: "Close Place details" }).click();
   await page.getByRole("button", { name: "Open settings" }).click();
-  await page.locator('summary[aria-label="Photograph style"]').click();
+  await page.getByRole("button", { name: "Photograph style" }).click();
   await page
     .getByText("Photo corner roundness")
     .locator("..")
@@ -134,14 +134,16 @@ test("groups settings, changes labels and accepts a custom map", async ({
 }) => {
   await page.getByRole("button", { name: "Open settings" }).click();
   await expect(page.getByText("Map background")).toBeVisible();
-  await page.locator('summary[aria-label="Place labels"]').click();
+  const labelSettings = page.getByRole("button", { name: "Place labels" });
+  await labelSettings.click();
+  await expect(labelSettings).toHaveAttribute("aria-expanded", "true");
   await page.getByLabel("Show place descriptions").uncheck();
   await page
-    .locator('summary[aria-label="Callout placement & connectors"]')
+    .getByRole("button", { name: "Callout placement & connectors" })
     .click();
   await page.getByLabel("Arrow style").selectOption("dashed");
   await expect(page.getByLabel("Arrow style")).toHaveValue("dashed");
-  await page.locator('summary[aria-label="Add another map"]').click();
+  await page.getByRole("button", { name: "Add another map" }).click();
   await page.getByLabel("Name").fill("My local tiles");
   await page.getByLabel("Source type").selectOption("raster");
   await page.getByLabel("Map URL").fill("https://example.test/{z}/{x}/{y}.png");

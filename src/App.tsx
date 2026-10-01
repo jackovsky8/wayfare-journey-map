@@ -916,7 +916,7 @@ export function App() {
                   <small>Keep all journey items inside the map frame.</small>
                 </span>
                 <input
-                  aria-label="Show place descriptions"
+                  aria-label="Automatically fit journey"
                   type="checkbox"
                   checked={settings.autoFit}
                   onChange={(event) =>
@@ -1026,6 +1026,7 @@ export function App() {
                   <small>Include each place’s story below its name.</small>
                 </span>
                 <input
+                  aria-label="Show place descriptions"
                   type="checkbox"
                   checked={settings.labels.showDescriptions}
                   onChange={(event) =>
@@ -1498,18 +1499,25 @@ function SettingGroup({
   open?: boolean;
   children: React.ReactNode;
 }) {
+  const [expanded, setExpanded] = useState(Boolean(open));
   return (
-    <details className="setting-group" open={open}>
-      <summary aria-label={title}>
+    <section className={`setting-group ${expanded ? "is-open" : ""}`}>
+      <button
+        type="button"
+        className="setting-summary"
+        aria-label={title}
+        aria-expanded={expanded}
+        onClick={() => setExpanded((current) => !current)}
+      >
         <span className="setting-icon">{icon}</span>
         <span>
           <strong>{title}</strong>
           <small>{description}</small>
         </span>
         <ChevronDown className="chevron" />
-      </summary>
-      <div className="setting-content">{children}</div>
-    </details>
+      </button>
+      {expanded && <div className="setting-content">{children}</div>}
+    </section>
   );
 }
 
