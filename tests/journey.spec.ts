@@ -90,7 +90,7 @@ test("imports a GPX track and connects it in the journey sequence", async ({
       '<?xml version="1.0"?><gpx><trk><name>Morning walk</name><trkseg><trkpt lat="48.20" lon="16.37"/><trkpt lat="48.21" lon="16.38"/></trkseg></trk></gpx>',
     ),
   });
-  await expect(page.getByDisplayValue("Morning walk")).toBeVisible();
+  await expect(page.getByLabel("Name for item 2")).toHaveValue("Morning walk");
   await expect(page.getByText(/2 GPX points/)).toBeVisible();
   await expect(
     page.getByText("Tracks").locator("..").getByText("1"),
@@ -170,5 +170,5 @@ test("explains the workflow and offers every export format", async ({
 test("persists the full journey in browser storage", async ({ page }) => {
   await addPlace(page, "Vienna");
   await page.reload();
-  await expect(page.getByDisplayValue("Vienna")).toBeVisible();
+  await expect(page.getByLabel("Name for item 1")).toHaveValue("Vienna");
 });
