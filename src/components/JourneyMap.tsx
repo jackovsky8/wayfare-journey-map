@@ -313,11 +313,18 @@ export const JourneyMap = forwardRef<JourneyMapHandle, Props>(
           const number = document.createElement("span");
           number.className = "pin-number-overlay";
           number.textContent = String(index + 1);
-          pinMarkersRef.current.push(
-            new maplibregl.Marker({ element: number, anchor: "center" })
-              .setLngLat([place.lng, place.lat])
-              .addTo(map),
+          const pinMarker = new maplibregl.Marker({
+            element: number,
+            anchor: "center",
+          })
+            .setLngLat([place.lng, place.lat])
+            .addTo(map);
+          number.setAttribute("role", "img");
+          number.setAttribute(
+            "aria-label",
+            `Place ${index + 1}: ${place.name}`,
           );
+          pinMarkersRef.current.push(pinMarker);
         }
         if (!place.name && !place.photo) return;
         const element = document.createElement("div");

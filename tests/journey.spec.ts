@@ -72,7 +72,7 @@ test("adds, edits, reorders and removes places", async ({ page }) => {
   await expect(page.getByText("199 km")).toBeVisible();
   await page.getByRole("button", { name: "Edit" }).first().click();
   await page.getByLabel("Description").fill("First coffee of the journey");
-  await page.getByLabel("Map marker").selectOption("dot");
+  await page.getByLabel("Map marker", { exact: true }).selectOption("dot");
   await page.getByRole("button", { name: "Close Place details" }).click();
   await expect(page.getByText("First coffee of the journey")).toBeVisible();
   await page.getByRole("button", { name: "Delete Graz" }).click();
@@ -109,16 +109,16 @@ test("adds and styles a place photograph", async ({ page }) => {
     ),
   });
   await expect(page.locator(".photo-preview")).toBeVisible();
-  await page.getByRole("button", { name: "Close Edit Vienna" }).click();
+  await page.getByRole("button", { name: "Close Place details" }).click();
   await page.getByRole("button", { name: "Open settings" }).click();
-  await page.getByText("Photograph style").click();
+  await page.getByText("Photograph style", { exact: true }).click();
   await page
     .getByText("Photo corner roundness")
     .locator("..")
     .getByRole("slider")
     .fill("40");
   await page.getByRole("button", { name: "Close Settings" }).click();
-  await page.getByRole("button", { name: "Edit Vienna" }).click();
+  await page.getByRole("button", { name: "Edit" }).first().click();
   await expect(page.locator(".photo-preview")).toHaveCSS(
     "border-radius",
     "40%",
@@ -130,21 +130,25 @@ test("groups settings, changes labels and accepts a custom map", async ({
 }) => {
   await page.getByRole("button", { name: "Open settings" }).click();
   await expect(page.getByText("Map background")).toBeVisible();
-  await page.getByText("Place labels").click();
+  await page.getByText("Place labels", { exact: true }).click();
   await page
     .getByText("Show descriptions")
     .locator("..")
     .getByRole("checkbox")
     .uncheck();
-  await page.getByText("Callout placement & connectors").click();
+  await page
+    .getByText("Callout placement & connectors", { exact: true })
+    .click();
   await page.getByLabel("Arrow style").selectOption("dashed");
   await expect(page.getByLabel("Arrow style")).toHaveValue("dashed");
-  await page.getByText("Add another map").click();
+  await page.getByText("Add another map", { exact: true }).click();
   await page.getByLabel("Name").fill("My local tiles");
   await page.getByLabel("Source type").selectOption("raster");
   await page.getByLabel("Map URL").fill("https://example.test/{z}/{x}/{y}.png");
   await page.getByRole("button", { name: "Add and select map" }).click();
-  await expect(page.getByText("My local tiles", { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Remove My local tiles" }),
+  ).toBeVisible();
 });
 
 test("explains the workflow and offers every export format", async ({
@@ -164,7 +168,12 @@ test("explains the workflow and offers every export format", async ({
   await expect(
     page.getByRole("button", { name: "Download image" }),
   ).toBeVisible();
-  await expect(page.getByRole("button", { name: /GPX/ })).toBeVisible();
+  await expect(
+    page.getByRole("button", {
+      name: "GPX Complete connected route",
+      exact: true,
+    }),
+  ).toBeVisible();
 });
 
 test("persists the full journey in browser storage", async ({ page }) => {
