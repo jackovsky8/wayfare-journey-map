@@ -14,12 +14,17 @@ import type {
 } from "../types";
 import {
   connectorPath,
-  layoutCallouts as computeCalloutLayout,
+  type CalloutItem,
   type CalloutPlacement,
+  type LayoutOptions,
+  type Point,
 } from "../lib/callout-layout";
 
 export interface JourneyMapHandle {
-  exportImage: (format: "png" | "jpeg" | "webp") => void;
+  exportImage: (
+    format: "png" | "jpeg" | "webp",
+    output?: { width: number; height: number },
+  ) => void;
   fit: () => void;
 }
 
@@ -34,6 +39,7 @@ interface Props {
   labels: LabelStyle;
   photos: PhotoAppearance;
   callouts: CalloutStyle;
+  suspendLayout: boolean;
 }
 
 const emptyCollection = { type: "FeatureCollection" as const, features: [] };
@@ -71,6 +77,30 @@ const loadImage = (source: string) =>
   });
 
 const svgNamespace = "http://www.w3.org/2000/svg";
+const computeLayoutInBackground = (
+  items: CalloutItem[],
+  route: Point[],
+  viewport: { width: number; height: number },
+  options?: LayoutOptions,
+) =>
+  new Promise<CalloutPlacement[]>((resolve, reject) => {
+    const worker = new Worker(
+      new URL("../workers/callout-layout.worker.ts", import.meta.url),
+      { type: "module" },
+    );
+    worker.onmessage = (
+      event: MessageEvent<{ placements: CalloutPlacement[] }>,
+    ) => {
+      worker.terminate();
+      resolve(event.data.placements);
+    };
+    worker.onerror = (event) => {
+      worker.terminate();
+      reject(event.error);
+    };
+    worker.postMessage({ id: 1, items, route, viewport, options });
+  });
+
 function drawConnectors(
   svg: SVGSVGElement,
   placements: CalloutPlacement[],
@@ -174,6 +204,7 @@ export const JourneyMap = forwardRef<JourneyMapHandle, Props>(
       labels,
       photos,
       callouts,
+      suspendLayout,
     },
     ref,
   ) => {
@@ -181,6 +212,8 @@ export const JourneyMap = forwardRef<JourneyMapHandle, Props>(
     const calloutLayerRef = useRef<HTMLDivElement>(null);
     const connectorRef = useRef<SVGSVGElement>(null);
     const mapRef = useRef<MapLibreMap | null>(null);
+    const layoutWorkerRef = useRef<Worker | null>(null);
+    const layoutRequestRef = useRef(0);
     const readyRef = useRef(false);
     const calloutEntriesRef = useRef<
       Array<{ element: HTMLDivElement; lngLat: [number, number] }>
@@ -195,6 +228,7 @@ export const JourneyMap = forwardRef<JourneyMapHandle, Props>(
       labels,
       photos,
       callouts,
+      suspendLayout,
     });
     latestRef.current = {
       places,
@@ -204,6 +238,7 @@ export const JourneyMap = forwardRef<JourneyMapHandle, Props>(
       labels,
       photos,
       callouts,
+      suspendLayout,
     };
 
     const fit = () => {
@@ -235,10 +270,16 @@ export const JourneyMap = forwardRef<JourneyMapHandle, Props>(
     const layoutCallouts = () => {
       const map = mapRef.current;
       const svg = connectorRef.current;
-      if (!map || !svg) return;
-      const routePoints = latestRef.current.route.coordinates.map(
-        (coordinate) => map.project(coordinate),
-      );
+      const worker = layoutWorkerRef.current;
+      if (!map || !svg || !worker || latestRef.current.suspendLayout) return;
+      const coordinates = latestRef.current.route.coordinates;
+      const stride = Math.max(1, Math.ceil(coordinates.length / 600));
+      const routePoints = coordinates
+        .filter(
+          (_, index) =>
+            index % stride === 0 || index === coordinates.length - 1,
+        )
+        .map((coordinate) => map.project(coordinate));
       const items = calloutEntriesRef.current.map((entry, index) => {
         const anchor = map.project(entry.lngLat);
         return {
@@ -248,22 +289,20 @@ export const JourneyMap = forwardRef<JourneyMapHandle, Props>(
           height: entry.element.offsetHeight,
         };
       });
-      const placements = computeCalloutLayout(items, routePoints, {
-        width: map.getContainer().clientWidth,
-        height: map.getContainer().clientHeight,
+      worker.postMessage({
+        id: ++layoutRequestRef.current,
+        items,
+        route: routePoints,
+        viewport: {
+          width: map.getContainer().clientWidth,
+          height: map.getContainer().clientHeight,
+        },
       });
-      placements.forEach((placement, index) => {
-        const element = calloutEntriesRef.current[index].element;
-        element.style.left = `${placement.box.left}px`;
-        element.style.top = `${placement.box.top}px`;
-        element.style.opacity = "1";
-      });
-      drawConnectors(svg, placements, latestRef.current.callouts);
     };
 
     const renderCallouts = () => {
       const map = mapRef.current;
-      if (!map) return;
+      if (!map || latestRef.current.suspendLayout) return;
       calloutEntriesRef.current.forEach(({ element }) => element.remove());
       calloutEntriesRef.current = [];
       pinMarkersRef.current.forEach((marker) => marker.remove());
@@ -466,6 +505,36 @@ export const JourneyMap = forwardRef<JourneyMapHandle, Props>(
 
     useEffect(() => {
       if (!containerRef.current || mapRef.current) return;
+      const worker = new Worker(
+        new URL("../workers/callout-layout.worker.ts", import.meta.url),
+        { type: "module" },
+      );
+      layoutWorkerRef.current = worker;
+      worker.onmessage = (
+        event: MessageEvent<{
+          id: number;
+          placements: CalloutPlacement[];
+        }>,
+      ) => {
+        if (
+          event.data.id !== layoutRequestRef.current ||
+          latestRef.current.suspendLayout
+        )
+          return;
+        event.data.placements.forEach((placement, index) => {
+          const element = calloutEntriesRef.current[index]?.element;
+          if (!element) return;
+          element.style.left = `${placement.box.left}px`;
+          element.style.top = `${placement.box.top}px`;
+          element.style.opacity = "1";
+        });
+        if (connectorRef.current)
+          drawConnectors(
+            connectorRef.current,
+            event.data.placements,
+            latestRef.current.callouts,
+          );
+      };
       const map = new maplibregl.Map({
         container: containerRef.current,
         style: styleFor(mapSource),
@@ -487,13 +556,25 @@ export const JourneyMap = forwardRef<JourneyMapHandle, Props>(
         addJourneyLayers();
         if (autoFit) fit();
       });
-      map.on("move", layoutCallouts);
+      map.on("movestart", () => {
+        if (calloutLayerRef.current)
+          calloutLayerRef.current.style.opacity = "0";
+        if (connectorRef.current) connectorRef.current.style.opacity = "0";
+      });
+      map.on("moveend", () => {
+        if (calloutLayerRef.current)
+          calloutLayerRef.current.style.opacity = "1";
+        if (connectorRef.current) connectorRef.current.style.opacity = "1";
+        layoutCallouts();
+      });
       map.on("resize", layoutCallouts);
       map.on("error", (event) => console.warn("Map source error", event.error));
       return () => {
         calloutEntriesRef.current.forEach(({ element }) => element.remove());
         pinMarkersRef.current.forEach((marker) => marker.remove());
         map.remove();
+        worker.terminate();
+        layoutWorkerRef.current = null;
         mapRef.current = null;
       };
     }, []);
@@ -517,8 +598,10 @@ export const JourneyMap = forwardRef<JourneyMapHandle, Props>(
     }, [mapSource.id, mapSource.kind, mapSource.url]);
 
     useEffect(() => {
-      draw();
-      if (autoFit) fit();
+      if (!suspendLayout) {
+        draw();
+        if (autoFit) fit();
+      }
     }, [
       places,
       route,
@@ -528,6 +611,7 @@ export const JourneyMap = forwardRef<JourneyMapHandle, Props>(
       labels,
       photos,
       callouts,
+      suspendLayout,
     ]);
     useEffect(() => {
       if (!autoFit) mapRef.current?.easeTo({ zoom, duration: 350 });
@@ -535,7 +619,7 @@ export const JourneyMap = forwardRef<JourneyMapHandle, Props>(
 
     useImperativeHandle(ref, () => ({
       fit,
-      exportImage: async (format) => {
+      exportImage: async (format, output) => {
         const map = mapRef.current;
         if (!map) return;
         await new Promise<void>((resolve) =>
@@ -586,7 +670,7 @@ export const JourneyMap = forwardRef<JourneyMapHandle, Props>(
             return { x: point.x * scale, y: point.y * scale };
           },
         );
-        const exportPlacements = computeCalloutLayout(
+        const exportPlacements = await computeLayoutInBackground(
           exportItems,
           routePoints,
           { width: canvas.width, height: canvas.height },
@@ -732,9 +816,32 @@ export const JourneyMap = forwardRef<JourneyMapHandle, Props>(
             }
           }
         }
+        let downloadCanvas = canvas;
+        if (output) {
+          downloadCanvas = document.createElement("canvas");
+          downloadCanvas.width = output.width;
+          downloadCanvas.height = output.height;
+          const outputContext = downloadCanvas.getContext("2d");
+          if (!outputContext) return;
+          outputContext.fillStyle = "#f5f2ea";
+          outputContext.fillRect(0, 0, output.width, output.height);
+          const fitScale = Math.min(
+            output.width / canvas.width,
+            output.height / canvas.height,
+          );
+          const width = canvas.width * fitScale;
+          const height = canvas.height * fitScale;
+          outputContext.drawImage(
+            canvas,
+            (output.width - width) / 2,
+            (output.height - height) / 2,
+            width,
+            height,
+          );
+        }
         const anchor = document.createElement("a");
         anchor.download = `journey-map.${format === "jpeg" ? "jpg" : format}`;
-        anchor.href = canvas.toDataURL(`image/${format}`, 0.94);
+        anchor.href = downloadCanvas.toDataURL(`image/${format}`, 0.94);
         anchor.click();
       },
     }));

@@ -59,6 +59,65 @@ const emptyRoute: RouteGeometry = {
   durationSeconds: 0,
 };
 
+const EXPORT_PRESETS = [
+  {
+    id: "screen",
+    label: "Current map view",
+    detail: "Same proportions as the editor",
+    width: 0,
+    height: 0,
+  },
+  {
+    id: "a4-p",
+    label: "A4 portrait",
+    detail: "210 × 297 mm · 150 dpi",
+    width: 1240,
+    height: 1754,
+  },
+  {
+    id: "a4-l",
+    label: "A4 landscape",
+    detail: "297 × 210 mm · 150 dpi",
+    width: 1754,
+    height: 1240,
+  },
+  {
+    id: "a5-p",
+    label: "A5 portrait",
+    detail: "148 × 210 mm · 150 dpi",
+    width: 874,
+    height: 1240,
+  },
+  {
+    id: "a5-l",
+    label: "A5 landscape",
+    detail: "210 × 148 mm · 150 dpi",
+    width: 1240,
+    height: 874,
+  },
+  {
+    id: "book-square",
+    label: "Photo book square",
+    detail: "20 × 20 cm",
+    width: 1600,
+    height: 1600,
+  },
+  {
+    id: "book-l",
+    label: "Photo book landscape",
+    detail: "28 × 21 cm",
+    width: 1680,
+    height: 1260,
+  },
+  {
+    id: "photo-10x15",
+    label: "Photo print portrait",
+    detail: "10 × 15 cm",
+    width: 1200,
+    height: 1800,
+  },
+] as const;
+
 const defaults: AppSettings = {
   mapStyle: "ofm-positron",
   routeColor: "#df5f3f",
@@ -151,6 +210,10 @@ export function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const [exportFormat, setExportFormat] = useState<"png" | "jpeg" | "webp">(
+    "png",
+  );
+  const [exportPreset, setExportPreset] = useState("screen");
   const [editingPlace, setEditingPlace] = useState<string | null>(null);
   const [routeStatus, setRouteStatus] = useState<
     "idle" | "routing" | "fallback"
@@ -596,6 +659,7 @@ export function App() {
             labels={settings.labels}
             photos={settings.photos}
             callouts={settings.callouts}
+            suspendLayout={settingsOpen}
           />
           <div className="map-toolbar">
             <select
@@ -1269,11 +1333,13 @@ export function App() {
             </HelpStep>
             <HelpStep number="5" title="Style the map">
               Settings are grouped into background, route, labels, custom maps,
-              and routing. Built-in maps need no key.
+              and routing. Built-in maps need no key. Callout placement pauses
+              while Settings is open and updates after you close it.
             </HelpStep>
             <HelpStep number="6" title="Export">
-              Download the finished composition as PNG, JPG, or WebP, or export
-              the complete connected route as GPX.
+              Choose PNG, JPG, or WebP and a current-view, A4, A5, photo-book,
+              or photo-print size. You can also export the connected route as
+              GPX.
             </HelpStep>
           </div>
           <div className="help-note">
@@ -1293,30 +1359,53 @@ export function App() {
           eyebrow="Take it with you"
           onClose={() => setExportOpen(false)}
         >
-          <div className="export-grid">
-            {(["png", "jpeg", "webp"] as const).map((format) => (
-              <button
-                key={format}
-                onClick={() => {
-                  mapRef.current?.exportImage(format);
-                  setExportOpen(false);
-                }}
+          <div className="export-options">
+            <label>
+              Page or photo-book format
+              <select
+                value={exportPreset}
+                onChange={(event) => setExportPreset(event.target.value)}
               >
-                <ImageDown size={20} />
-                <span>
-                  <strong>
-                    {format === "jpeg" ? "JPG" : format.toUpperCase()}
-                  </strong>
-                  <small>
-                    {format === "png"
-                      ? "Best quality"
-                      : format === "jpeg"
-                        ? "Small & universal"
-                        : "Smallest file"}
-                  </small>
-                </span>
-              </button>
-            ))}
+                {EXPORT_PRESETS.map((preset) => (
+                  <option key={preset.id} value={preset.id}>
+                    {preset.label} — {preset.detail}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Image file format
+              <select
+                value={exportFormat}
+                onChange={(event) =>
+                  setExportFormat(event.target.value as typeof exportFormat)
+                }
+              >
+                <option value="png">PNG — best quality</option>
+                <option value="jpeg">JPG — universal</option>
+                <option value="webp">WebP — smallest file</option>
+              </select>
+            </label>
+            <button
+              className="button primary export-download"
+              onClick={() => {
+                const preset =
+                  EXPORT_PRESETS.find((entry) => entry.id === exportPreset) ??
+                  EXPORT_PRESETS[0];
+                mapRef.current?.exportImage(
+                  exportFormat,
+                  preset.width
+                    ? { width: preset.width, height: preset.height }
+                    : undefined,
+                );
+                setExportOpen(false);
+              }}
+            >
+              <ImageDown size={18} />
+              Download image
+            </button>
+          </div>
+          <div className="export-grid compact">
             <button
               onClick={() => {
                 downloadText(
@@ -1336,7 +1425,8 @@ export function App() {
           </div>
           <p className="export-note">
             Image exports include the current map, route, labels, photographs,
-            and frames.
+            and frames. Fixed-size formats preserve the whole map and add
+            neutral margins when its proportions differ from the chosen page.
           </p>
         </Modal>
       )}

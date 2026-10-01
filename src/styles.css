@@ -607,6 +607,34 @@ h2 {
   grid-template-columns: 1fr 1fr;
   gap: 9px;
 }
+.export-grid.compact {
+  grid-template-columns: 1fr;
+  margin-top: 10px;
+}
+.export-options {
+  display: grid;
+  gap: 12px;
+}
+.export-options label {
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 650;
+}
+.export-options select {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 11px;
+  border: 1px solid #ccc6ba;
+  border-radius: 9px;
+  background: #fff;
+}
+.export-download {
+  justify-content: center;
+  min-height: 44px;
+  background: #252a25;
+  color: #fff;
+}
 .export-grid button {
   min-height: 72px;
   display: flex;
@@ -660,12 +688,19 @@ h2 {
     height: auto;
     min-height: calc(100vh - 60px);
     grid-template-columns: 1fr;
-    grid-template-rows: minmax(55vh, 600px) minmax(55vh, 600px);
+    grid-template-rows: minmax(52svh, 420px) auto;
     padding: 8px;
   }
   .journey-panel {
     grid-row: 2;
     border-radius: 14px;
+  }
+  .map-toolbar {
+    max-width: calc(100% - 30px);
+  }
+  .map-toolbar select {
+    min-width: 0;
+    max-width: min(58vw, 260px);
   }
   .map-panel {
     grid-row: 1;
@@ -676,6 +711,24 @@ h2 {
   }
 }
 @media (max-width: 440px) {
+  .topbar {
+    padding: 0 8px;
+  }
+  .brand {
+    font-size: 0;
+  }
+  .brand-mark {
+    width: 32px;
+    height: 32px;
+  }
+  .button {
+    padding: 9px 10px;
+  }
+  .workspace {
+    grid-template-rows: minmax(48svh, 360px) auto;
+    gap: 7px;
+    padding: 6px;
+  }
   .journey-panel {
     padding: 21px 14px;
   }
@@ -692,6 +745,16 @@ h2 {
   }
   .export-grid {
     grid-template-columns: 1fr;
+  }
+  .modal-backdrop {
+    align-items: end;
+    padding: 0;
+  }
+  .modal {
+    width: 100%;
+    max-height: 92svh;
+    padding: 20px 16px calc(20px + env(safe-area-inset-bottom));
+    border-radius: 18px 18px 0 0;
   }
 }
 

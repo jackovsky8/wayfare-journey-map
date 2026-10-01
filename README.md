@@ -29,6 +29,8 @@ Wayfare is a frontend-only travel-map editor for turning places, stories, photog
 - Prefer the closest available position while avoiding the route, map edge, and every other callout.
 - Recalculate placement while the map pans, zooms, resizes, or changes style.
 - Position cards and arrows in one shared map overlay, so connectors meet the exact card edge and place coordinate without marker-offset drift.
+- Run collision placement in a Web Worker so route geometry does not block editing or scrolling.
+- Pause placement work while Settings is open, then calculate once after it closes.
 - Connect every callout to its exact place with a curved, straight, or dashed arrow.
 - Configure connector color and width in **Settings → Callout placement & connectors**.
 - Configure the shared place-label typography, colors, border, rounding, and description visibility.
@@ -74,6 +76,8 @@ Enter the attribution required by the map provider. URLs and custom-map definiti
 - Automatically frame the complete journey or select a manual zoom.
 - Configure route color and width.
 - Export PNG, JPG, or WebP images containing the map, route, captions, photographs, frames, and the same collision-aware connector layout shown in the editor.
+- Choose the current view, A4/A5 portrait or landscape, square or landscape photo-book pages, or a 10 × 15 cm photo-print preset.
+- Preserve the complete map without distortion; fixed page formats add neutral margins when their aspect ratio differs.
 - Export a GPX file containing place waypoints and the complete connected journey track.
 - Use the built-in Help section for an in-app workflow guide.
 
@@ -122,3 +126,7 @@ The Playwright suite covers place editing, GPX import, photograph controls, grou
 The included workflow installs dependencies, verifies formatting, runs unit and Chromium browser tests, creates the production build, and deploys `dist/`.
 
 Vite uses relative asset paths, so the build supports both root domains and GitHub repository subpaths.
+
+## Responsive layout
+
+On tablets and phones, the map appears first and the journey editor follows below it. Toolbars contract to the available width, settings and editors become bottom sheets on narrow phones, and multi-column controls collapse to touch-friendly single columns.

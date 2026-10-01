@@ -158,10 +158,13 @@ test("explains the workflow and offers every export format", async ({
   await page.getByRole("button", { name: "Close How Wayfare works" }).click();
   await addPlace(page, "Vienna");
   await page.getByRole("button", { name: "Export" }).click();
-  for (const format of ["PNG", "JPG", "WEBP", "GPX"])
-    await expect(
-      page.getByRole("button", { name: new RegExp(format) }),
-    ).toBeVisible();
+  await expect(page.getByLabel("Page or photo-book format")).toBeVisible();
+  await page.getByLabel("Page or photo-book format").selectOption("a4-p");
+  await expect(page.getByLabel("Image file format")).toHaveValue("png");
+  await expect(
+    page.getByRole("button", { name: "Download image" }),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: /GPX/ })).toBeVisible();
 });
 
 test("persists the full journey in browser storage", async ({ page }) => {
