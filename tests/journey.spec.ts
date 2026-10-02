@@ -64,8 +64,8 @@ async function addPlace(page: Page, name: string) {
 test.beforeEach(async ({ page }) => {
   await mockApis(page);
   await page.goto("/");
-  const necessary = page.getByRole("button", { name: "Necessary only" });
-  if (await necessary.isVisible()) await necessary.click();
+  const continueButton = page.getByRole("button", { name: "Continue" });
+  if (await continueButton.isVisible()) await continueButton.click();
 });
 
 test("adds, edits, reorders and removes places", async ({ page }) => {
@@ -218,17 +218,28 @@ test("keeps named journeys and undoes with browser back", async ({ page }) => {
   await expect(page.getByLabel("Journey name")).toHaveValue("New journey");
 });
 
-test("offers privacy information and granular vendor consent", async ({
-  page,
-}) => {
+test("shows active vendors and privacy information", async ({ page }) => {
   await page.getByRole("button", { name: "Privacy settings" }).click();
   await expect(
     page.getByRole("heading", { name: "Privacy settings" }),
   ).toBeVisible();
-  await page.getByLabel("Allow Cloudflare Web Analytics").check();
-  await page.getByRole("button", { name: "Save privacy settings" }).click();
+  await expect(page.getByText("Cloudflare Web Analytics")).toBeVisible();
+  await expect(page.getByText("Google AdSense")).toBeVisible();
+  await expect(page.getByText("Active")).toHaveCount(3);
+  await page.getByRole("button", { name: "Close privacy information" }).click();
   await page.getByRole("link", { name: "Privacy", exact: true }).click();
   await expect(
     page.getByText("Information stored on your device"),
   ).toBeVisible();
+});
+
+test("reorders journey items with touch-safe controls", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile", "Mobile interaction only");
+  await addPlace(page, "Vienna");
+  await addPlace(page, "Graz");
+  await page.getByRole("button", { name: "Move Graz up" }).click();
+  await expect(page.getByLabel("Name for item 1")).toHaveValue("Graz");
+  await expect(page.getByLabel("Name for item 2")).toHaveValue("Vienna");
 });

@@ -95,14 +95,14 @@ Enter the attribution required by the map provider. URLs and custom-map definiti
 
 ## Browser storage and privacy
 
-- Named journeys, descriptions, GPX coordinates, reversible diffs, appearance settings, custom maps, consent settings, and resized photographs are stored in `localStorage`.
+- Named journeys, descriptions, GPX coordinates, reversible diffs, appearance settings, custom maps, privacy-notice state, and resized photographs are stored in `localStorage`.
 - The optional Mapbox token is stored in `sessionStorage` and disappears when the browser session ends.
 - Search terms are sent directly to Nominatim.
 - Coordinates used for road connections are sent directly to OSRM or the user-selected Mapbox service.
 - There is no Wayfare account, database, or application server.
 - Base64 copy/paste and animated QR transfers happen locally; Wayfare does not upload the transferred data.
-- The in-app Privacy page explains local storage, required map-provider requests, sharing, and optional vendors.
-- Cloudflare Web Analytics and Google AdSense are loaded only when configured at build time **and** permitted by the visitor in the cookie banner/privacy settings.
+- The in-app Privacy page explains local storage, required map-provider requests, sharing, Cloudflare Web Analytics, and Google AdSense.
+- Cloudflare Web Analytics and Google AdSense are inserted directly into the built HTML when their build-time IDs are configured. They are displayed as active services and cannot be disabled in Wayfare.
 
 Browser storage is limited. For journeys containing many photographs, use compressed images and periodically export the journey.
 
@@ -140,7 +140,7 @@ The Playwright suite covers desktop and mobile place editing, GPX import and end
 
 The included workflow installs dependencies, verifies formatting, runs unit and Chromium browser tests, creates the production build, and deploys `dist/`.
 
-Optional GitHub configuration:
+Required GitHub deployment configuration:
 
 | GitHub setting                      | Vite build variable               | Purpose                                                 |
 | ----------------------------------- | --------------------------------- | ------------------------------------------------------- |
@@ -148,7 +148,9 @@ Optional GitHub configuration:
 | Secret `CLOUDFLARE_ANALYTICS_TOKEN` | `VITE_CLOUDFLARE_ANALYTICS_TOKEN` | Cloudflare Web Analytics site token                     |
 | Variable `PUBLIC_SITE_URL`          | `VITE_PUBLIC_SITE_URL`            | Absolute production URL used for the canonical SEO link |
 
-Leave any value empty to omit that integration. AdSense is suitable for Auto ads; configure placement and site approval in the AdSense account. Optional vendor scripts are injected only after consent. Public frontend build variables are never secret at runtime even when supplied through GitHub Secrets.
+The build injects the standard AdSense loader directly into `<head>`, allowing Google’s crawler to detect it, and injects Cloudflare’s module beacon with its site token. AdSense is suitable for Auto ads; configure placement, site approval, and Google’s certified CMP/European regulations message in the AdSense account. Public frontend build variables are never secret at runtime even when supplied through GitHub Secrets.
+
+The privacy banner is informational: it links to the active-service details but does not disable either configured integration.
 
 Vite uses relative asset paths, so the build supports both root domains and GitHub repository subpaths.
 

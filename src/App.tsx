@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   BookOpen,
+  ChevronUp,
   ChevronDown,
   Download,
   GripVertical,
@@ -1090,6 +1091,35 @@ export function App() {
                     }}
                   >
                     <GripVertical className="drag-handle" size={18} />
+                    <div
+                      className="mobile-reorder"
+                      aria-label={`Reorder ${item.name}`}
+                    >
+                      <button
+                        disabled={index === 0}
+                        onClick={() =>
+                          commitItems(
+                            moveItem(items, index, index - 1),
+                            `Move ${item.name} up`,
+                          )
+                        }
+                        aria-label={`Move ${item.name} up`}
+                      >
+                        <ChevronUp size={15} />
+                      </button>
+                      <button
+                        disabled={index === items.length - 1}
+                        onClick={() =>
+                          commitItems(
+                            moveItem(items, index, index + 1),
+                            `Move ${item.name} down`,
+                          )
+                        }
+                        aria-label={`Move ${item.name} down`}
+                      >
+                        <ChevronDown size={15} />
+                      </button>
+                    </div>
                     <span className="stop-number">
                       {item.type === "track" ? <Route size={14} /> : index + 1}
                     </span>
@@ -2151,8 +2181,9 @@ export function App() {
             <p>
               Your journey, settings, descriptions, and resized photographs
               remain in this browser. Search and routing requests go directly to
-              the selected providers. Optional analytics and advertising remain
-              disabled until you consent.
+              the selected providers. Cloudflare Web Analytics and Google
+              AdSense are active when configured by the site owner; use the
+              privacy links for each vendor’s controls.
             </p>
             <button
               className="button ghost"
@@ -2261,56 +2292,35 @@ export function App() {
   );
 }
 
-type ConsentChoice = { analytics: boolean; ads: boolean };
-const CONSENT_KEY = "wayfare.consent.v1";
-
-function readConsent(): ConsentChoice | undefined {
-  try {
-    const value = localStorage.getItem(CONSENT_KEY);
-    return value ? (JSON.parse(value) as ConsentChoice) : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function saveConsent(choice: ConsentChoice) {
-  localStorage.setItem(CONSENT_KEY, JSON.stringify(choice));
-  dispatchEvent(new CustomEvent("wayfare-consent", { detail: choice }));
-}
+const NOTICE_KEY = "wayfare.privacy-notice.v2";
 
 function ConsentBanner({ onSettings }: { onSettings: () => void }) {
-  const [visible, setVisible] = useState(() => !readConsent());
+  const [visible, setVisible] = useState(
+    () => localStorage.getItem(NOTICE_KEY) !== "acknowledged",
+  );
   if (!visible) return null;
   return (
     <section className="consent-banner" aria-label="Cookie consent">
       <div>
         <strong>Your journey stays on this device</strong>
         <p>
-          Optional Cloudflare analytics and Google advertising load only with
-          your permission. Core map functions do not require consent cookies.
+          Cloudflare Web Analytics and Google AdSense are active when configured
+          by the site owner. Your routes, descriptions, and photographs still
+          remain in this browser.
         </p>
       </div>
       <div className="consent-actions">
-        <button
-          className="button ghost"
-          onClick={() => {
-            saveConsent({ analytics: false, ads: false });
-            setVisible(false);
-          }}
-        >
-          Necessary only
-        </button>
         <button className="button ghost" onClick={onSettings}>
-          Choose settings
+          Privacy details
         </button>
         <button
           className="button dark"
           onClick={() => {
-            saveConsent({ analytics: true, ads: true });
+            localStorage.setItem(NOTICE_KEY, "acknowledged");
             setVisible(false);
           }}
         >
-          Accept optional services
+          Continue
         </button>
       </div>
     </section>
@@ -2326,14 +2336,11 @@ function PrivacyCenter({
   settingsOnly: boolean;
   onClose: () => void;
 }) {
-  const [choice, setChoice] = useState<ConsentChoice>(
-    () => readConsent() ?? { analytics: false, ads: false },
-  );
   if (!open) return null;
   return (
     <Modal
       title={settingsOnly ? "Privacy settings" : "Privacy"}
-      eyebrow="Your data, your choice"
+      eyebrow="How data is handled"
       onClose={onClose}
       wide
     >
@@ -2359,11 +2366,12 @@ function PrivacyCenter({
             journey code contains everything visible in the journey, including
             photographs; share it only with people you trust.
           </p>
-          <h3>Optional vendors</h3>
+          <h3>Analytics and advertising</h3>
           <p>
-            If configured by the site owner and permitted below, Cloudflare Web
-            Analytics measures visits and Google AdSense supplies advertising.
-            See the vendors’ own privacy controls:
+            When configured by the site owner, Cloudflare Web Analytics measures
+            visits and Google AdSense supplies advertising. These services are
+            active and cannot be disabled inside Wayfare. See the vendors’ own
+            privacy controls:
           </p>
           <ul>
             <li>
@@ -2396,55 +2404,29 @@ function PrivacyCenter({
         </div>
       )}
       <div className="privacy-choices">
-        <label>
-          <input type="checkbox" checked disabled />
+        <div className="vendor-status">
+          <span className="status-badge">Active</span>
           <span>
             <strong>Necessary storage</strong>
-            <small>Journeys, settings, consent choice, and editor state.</small>
+            <small>Journeys, settings, notice state, and editor history.</small>
           </span>
-        </label>
-        <label>
-          <input
-            type="checkbox"
-            aria-label="Allow Cloudflare Web Analytics"
-            checked={choice.analytics}
-            onChange={(event) =>
-              setChoice((current) => ({
-                ...current,
-                analytics: event.target.checked,
-              }))
-            }
-          />
+        </div>
+        <div className="vendor-status">
+          <span className="status-badge">Active</span>
           <span>
             <strong>Cloudflare Web Analytics</strong>
-            <small>Anonymous traffic and performance measurement.</small>
+            <small>Privacy-focused traffic and performance measurement.</small>
           </span>
-        </label>
-        <label>
-          <input
-            type="checkbox"
-            aria-label="Allow Google AdSense"
-            checked={choice.ads}
-            onChange={(event) =>
-              setChoice((current) => ({
-                ...current,
-                ads: event.target.checked,
-              }))
-            }
-          />
+        </div>
+        <div className="vendor-status">
+          <span className="status-badge">Active</span>
           <span>
             <strong>Google AdSense</strong>
             <small>Advertising and its related storage or identifiers.</small>
           </span>
-        </label>
-        <button
-          className="button dark"
-          onClick={() => {
-            saveConsent(choice);
-            onClose();
-          }}
-        >
-          Save privacy settings
+        </div>
+        <button className="button dark" onClick={onClose}>
+          Close privacy information
         </button>
       </div>
     </Modal>
@@ -2452,7 +2434,6 @@ function PrivacyCenter({
 }
 
 function OptionalVendors() {
-  const [choice, setChoice] = useState(readConsent);
   useEffect(() => {
     const siteUrl = import.meta.env.VITE_PUBLIC_SITE_URL;
     if (!siteUrl) return;
@@ -2466,40 +2447,6 @@ function OptionalVendors() {
     }
     canonical.href = siteUrl;
   }, []);
-  useEffect(() => {
-    const update = (event: Event) =>
-      setChoice((event as CustomEvent<ConsentChoice>).detail);
-    addEventListener("wayfare-consent", update);
-    return () => removeEventListener("wayfare-consent", update);
-  }, []);
-  useEffect(() => {
-    const analyticsToken = import.meta.env.VITE_CLOUDFLARE_ANALYTICS_TOKEN;
-    if (
-      choice?.analytics &&
-      analyticsToken &&
-      !document.getElementById("cf-analytics")
-    ) {
-      const script = document.createElement("script");
-      script.id = "cf-analytics";
-      script.defer = true;
-      script.src = "https://static.cloudflareinsights.com/beacon.min.js";
-      script.dataset.cfBeacon = JSON.stringify({ token: analyticsToken });
-      document.head.append(script);
-    }
-    const adsenseClient = import.meta.env.VITE_ADSENSE_CLIENT;
-    if (
-      choice?.ads &&
-      adsenseClient &&
-      !document.getElementById("google-adsense")
-    ) {
-      const script = document.createElement("script");
-      script.id = "google-adsense";
-      script.async = true;
-      script.crossOrigin = "anonymous";
-      script.src = `https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${encodeURIComponent(adsenseClient)}`;
-      document.head.append(script);
-    }
-  }, [choice]);
   return null;
 }
 
