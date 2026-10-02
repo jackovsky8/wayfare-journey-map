@@ -33,6 +33,7 @@ jobs:
         env:
           VITE_ADSENSE_CLIENT: ${{ secrets.VITE_ADSENSE_CLIENT || secrets.ADSENSE_CLIENT || vars.VITE_ADSENSE_CLIENT || vars.ADSENSE_CLIENT }}
           VITE_CLOUDFLARE_ANALYTICS_TOKEN: ${{ secrets.VITE_CLOUDFLARE_ANALYTICS_TOKEN || secrets.CLOUDFLARE_ANALYTICS_TOKEN || vars.VITE_CLOUDFLARE_ANALYTICS_TOKEN || vars.CLOUDFLARE_ANALYTICS_TOKEN }}
+          VITE_GOOGLE_SITE_VERIFICATION: ${{ vars.GOOGLE_SITE_VERIFICATION }}
           VITE_PUBLIC_SITE_URL: ${{ vars.PUBLIC_SITE_URL }}
       - name: Verify advertising and analytics snippets
         if: github.event_name != 'pull_request'

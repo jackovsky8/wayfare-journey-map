@@ -1,6 +1,13 @@
 import { defineConfig, loadEnv, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 
+const escapeHtmlAttribute = (value: string) =>
+  value
+    .replaceAll("&", "&amp;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+
 const vendorScripts = (mode: string): Plugin => ({
   name: "wayfare-vendor-scripts",
   transformIndexHtml(html) {
@@ -17,7 +24,15 @@ const vendorScripts = (mode: string): Plugin => ({
       env.CLOUDFLARE_WEB_ANALYTICS_TOKEN ||
       ""
     ).trim();
+    const googleSiteVerification = (
+      env.VITE_GOOGLE_SITE_VERIFICATION ||
+      env.GOOGLE_SITE_VERIFICATION ||
+      ""
+    ).trim();
     const scripts = [
+      googleSiteVerification
+        ? `<meta name="google-site-verification" content="${escapeHtmlAttribute(googleSiteVerification)}" />`
+        : "",
       adsense
         ? `<script id="google-adsense" async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${encodeURIComponent(adsense)}" crossorigin="anonymous"></script>`
         : "",

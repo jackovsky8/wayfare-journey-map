@@ -152,11 +152,12 @@ The included workflow installs dependencies, verifies formatting, runs unit and 
 
 Required GitHub deployment configuration:
 
-| GitHub setting                      | Vite build variable               | Purpose                                                 |
-| ----------------------------------- | --------------------------------- | ------------------------------------------------------- |
-| Secret `ADSENSE_CLIENT`             | `VITE_ADSENSE_CLIENT`             | Google AdSense publisher client, for example `ca-pub-…` |
-| Secret `CLOUDFLARE_ANALYTICS_TOKEN` | `VITE_CLOUDFLARE_ANALYTICS_TOKEN` | Cloudflare Web Analytics site token                     |
-| Variable `PUBLIC_SITE_URL`          | `VITE_PUBLIC_SITE_URL`            | Absolute production URL used for the canonical SEO link |
+| GitHub setting                      | Vite build variable               | Purpose                                                                                          |
+| ----------------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------ |
+| Secret `ADSENSE_CLIENT`             | `VITE_ADSENSE_CLIENT`             | Google AdSense publisher client, for example `ca-pub-…`                                          |
+| Secret `CLOUDFLARE_ANALYTICS_TOKEN` | `VITE_CLOUDFLARE_ANALYTICS_TOKEN` | Cloudflare Web Analytics site token                                                              |
+| Variable `GOOGLE_SITE_VERIFICATION` | `VITE_GOOGLE_SITE_VERIFICATION`   | Google Search Console site-verification token; when empty, no verification meta tag is generated |
+| Variable `PUBLIC_SITE_URL`          | `VITE_PUBLIC_SITE_URL`            | Absolute production URL used for the canonical SEO link                                          |
 
 The build injects the standard AdSense loader directly into `<head>`, allowing Google’s crawler to detect it, and injects Cloudflare’s module beacon with its site token. AdSense is suitable for Auto ads; configure placement, site approval, and Google’s certified CMP/European regulations message in the AdSense account. Public frontend build variables are never secret at runtime even when supplied through GitHub Secrets.
 
