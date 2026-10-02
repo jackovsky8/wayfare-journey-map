@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="index,follow" />
+    <meta
+      name="description"
+      content="Privacy information for Wayfare Journey Map Studio."
+    />
+    <title>Privacy — Wayfare Journey Map Studio</title>
+    <style>
+      :root {
+        font-family: Inter, system-ui, sans-serif;
+        color: #292e29;
+        background: #f3efe5;
+      }
+      body {
+        margin: 0;
+      }
+      main {
+        width: min(760px, calc(100% - 32px));
+        margin: 32px auto;
+        padding: clamp(22px, 5vw, 48px);
+        box-sizing: border-box;
+        border: 1px solid #d8d1c5;
+        border-radius: 18px;
+        background: #fffdf8;
+        box-shadow: 0 18px 55px #272b2420;
+      }
+      h1 {
+        margin-top: 0;
+        letter-spacing: -0.04em;
+      }
+      h2 {
+        margin-top: 2rem;
+        font-size: 1.2rem;
+      }
+      p,
+      li {
+        line-height: 1.65;
+        color: #565d54;
+      }
+      a {
+        color: #a6412b;
+      }
+      .back {
+        display: inline-block;
+        margin-bottom: 22px;
+        font-weight: 700;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <a class="back" href="./">Back to Wayfare</a>
+      <h1>Privacy at Wayfare</h1>
+      <p>
+        Wayfare is a frontend-only journey editor. There is no Wayfare account,
+        application database, or application backend receiving your journey.
+      </p>
+      <h2>Information stored on your device</h2>
+      <p>
+        Journey names, places, descriptions, GPX coordinates, editing history,
+        custom maps, appearance settings, resized photographs, and privacy
+        choices are stored in your browser. Clearing this site’s browser data
+        removes that local information.
+      </p>
+      <h2>Map, search, and routing providers</h2>
+      <p>
+        The browser requests map tiles directly from the selected map provider.
+        Place searches go to OpenStreetMap Nominatim. Route coordinates go to
+        OSRM or, when selected, Mapbox. These services receive normal technical
+        request data such as the IP address. A user-entered Mapbox token remains
+        in session storage and is not part of a shared journey.
+      </p>
+      <h2>Sharing</h2>
+      <p>
+        Base64 codes and animated QR frames are produced and reconstructed in
+        the browser. They contain the complete shared journey, including
+        photographs. Share them only with people you trust.
+      </p>
+      <h2>Optional analytics and advertising</h2>
+      <p>
+        When configured by the site owner, Cloudflare Web Analytics and Google
+        AdSense load only after the visitor permits them in Wayfare’s privacy
+        settings. If configuration tokens are absent, those integrations are
+        omitted.
+      </p>
+      <ul>
+        <li>
+          <a href="https://policies.google.com/privacy"
+            >Google privacy policy</a
+          >
+        </li>
+        <li>
+          <a href="https://myadcenter.google.com/">Google My Ad Center</a>
+        </li>
+        <li>
+          <a href="https://www.cloudflare.com/privacypolicy/"
+            >Cloudflare privacy policy</a
+          >
+        </li>
+      </ul>
+      <p>
+        Return to Wayfare and choose <strong>Privacy settings</strong> in the
+        footer to change optional consent at any time.
+      </p>
+    </main>
+  </body>
+</html>

@@ -40,6 +40,14 @@ export interface GpxTrack {
 
 export type JourneyItem = Place | GpxTrack;
 
+export interface JourneyDocument {
+  id: string;
+  name: string;
+  items: JourneyItem[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface RouteGeometry {
   coordinates: [number, number][];
   distanceMeters: number;

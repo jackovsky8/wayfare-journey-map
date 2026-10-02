@@ -64,6 +64,8 @@ async function addPlace(page: Page, name: string) {
 test.beforeEach(async ({ page }) => {
   await mockApis(page);
   await page.goto("/");
+  const necessary = page.getByRole("button", { name: "Necessary only" });
+  if (await necessary.isVisible()) await necessary.click();
 });
 
 test("adds, edits, reorders and removes places", async ({ page }) => {
@@ -188,11 +190,49 @@ test("persists the full journey in browser storage", async ({ page }) => {
   await expect(page.getByLabel("Name for item 1")).toHaveValue("Vienna");
 });
 
-test("creates a self-contained share URL and QR code", async ({ page }) => {
+test("copies, loads, and animates a self-contained journey code", async ({
+  page,
+}) => {
   await addPlace(page, "Vienna");
   await page.getByRole("button", { name: "Share journey" }).click();
+  await expect(page.getByLabel("Journey code")).not.toHaveValue(/https?:/);
+  await expect(page.getByAltText(/Journey QR frame 1 of/)).toBeVisible();
+  await page.getByRole("button", { name: "Start repeating frames" }).click();
   await expect(
-    page.getByAltText("QR code containing the shared journey URL"),
+    page.getByRole("button", { name: "Pause frames" }),
   ).toBeVisible();
-  await expect(page.getByLabel("Shareable URL")).toHaveValue(/\?journey=/);
+  const code = await page.getByLabel("Journey code").inputValue();
+  await page.getByLabel("Load a copied code").fill(code);
+  await page.getByRole("button", { name: "Load as new journey" }).click();
+  await expect(page.getByText(/Imported “My journey”/)).toBeVisible();
+});
+
+test("keeps named journeys and undoes with browser back", async ({ page }) => {
+  await page.getByLabel("Journey name").fill("Austria 2026");
+  await addPlace(page, "Vienna");
+  await page.goBack();
+  await expect(page.getByLabel("Name for item 1")).not.toBeVisible();
+  await page.getByRole("button", { name: "My journeys" }).click();
+  await expect(page.getByText("Austria 2026", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "New journey" }).click();
+  await expect(page.getByLabel("Journey name")).toHaveValue("New journey");
+});
+
+test("offers privacy information and granular vendor consent", async ({
+  page,
+}) => {
+  await page.getByRole("button", { name: "Privacy settings" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Privacy settings" }),
+  ).toBeVisible();
+  await page
+    .getByText("Cloudflare Web Analytics")
+    .locator("..")
+    .getByRole("checkbox")
+    .check();
+  await page.getByRole("button", { name: "Save privacy settings" }).click();
+  await page.getByRole("link", { name: "Privacy", exact: true }).click();
+  await expect(
+    page.getByText("Information stored on your device"),
+  ).toBeVisible();
 });

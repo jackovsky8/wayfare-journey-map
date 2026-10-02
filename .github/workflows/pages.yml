@@ -30,6 +30,10 @@ jobs:
       - run: npm test
       - run: npm run test:browser -- --project=chromium
       - run: npm run build
+        env:
+          VITE_ADSENSE_CLIENT: ${{ secrets.ADSENSE_CLIENT }}
+          VITE_CLOUDFLARE_ANALYTICS_TOKEN: ${{ secrets.CLOUDFLARE_ANALYTICS_TOKEN }}
+          VITE_PUBLIC_SITE_URL: ${{ vars.PUBLIC_SITE_URL }}
       - uses: actions/upload-pages-artifact@v3
         if: github.event_name != 'pull_request'
         with:

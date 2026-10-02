@@ -4,14 +4,49 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#f3efe5" />
+    <meta name="robots" content="index,follow,max-image-preview:large" />
+    <meta
+      name="keywords"
+      content="journey map maker, travel map, GPX editor, route map export, visited places map"
+    />
     <meta
       name="description"
       content="Turn a list of visited places into a beautiful journey map, image, or GPX file."
     />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Wayfare — Journey Map Studio" />
+    <meta
+      property="og:description"
+      content="Create a private travel map from places and GPX tracks, then export it for print or screen."
+    />
+    <meta name="twitter:card" content="summary" />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "Wayfare Journey Map Studio",
+        "applicationCategory": "TravelApplication",
+        "operatingSystem": "Any modern web browser",
+        "isAccessibleForFree": true,
+        "description": "A browser-based journey map maker for visited places and GPX tracks with print and image export.",
+        "featureList": [
+          "Place and GPX journey editor",
+          "Local browser storage",
+          "PNG, JPEG, WebP and GPX export",
+          "Copyable serialization and animated QR transfer",
+          "No application backend required"
+        ]
+      }
+    </script>
     <title>Wayfare — Journey Map Studio</title>
   </head>
   <body>
     <div id="root"></div>
+    <noscript>
+      Wayfare is a browser-based journey map maker. Add visited places and GPX
+      tracks, style labels and photographs, and export a map for print or
+      screen. JavaScript is required for the interactive editor.
+    </noscript>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

@@ -37,7 +37,16 @@ Wayfare is a frontend-only travel-map editor for turning places, stories, photog
 - Configure connector color and width in **Settings → Callout placement & connectors**.
 - Configure the shared place-label typography, colors, border, rounding, and description visibility.
 
-Photographs are resized to at most 1024 px and JPEG-compressed before being saved, reducing browser-storage, URL-sharing, and QR-code size while retaining useful visible detail.
+Photographs are resized to at most 1024 px and JPEG-compressed before being saved, reducing browser-storage and transfer size while retaining useful visible detail.
+
+### Multiple journeys and reversible history
+
+- Keep several named journeys in the same browser and switch through **My journeys**.
+- Every journey retains its own items and compact change history.
+- History entries store the changed array range (removed and added items), not full snapshots.
+- Undo the latest edit from the toolbar or History dialog.
+- The browser Back button undoes the latest edit without leaving the editor.
+- GPX cuts are a single reversible history change, restoring the original track when undone.
 
 ### Included free map styles
 
@@ -86,11 +95,14 @@ Enter the attribution required by the map provider. URLs and custom-map definiti
 
 ## Browser storage and privacy
 
-- Journey items, descriptions, appearance settings, custom maps, and resized photographs are stored in `localStorage`.
+- Named journeys, descriptions, GPX coordinates, reversible diffs, appearance settings, custom maps, consent settings, and resized photographs are stored in `localStorage`.
 - The optional Mapbox token is stored in `sessionStorage` and disappears when the browser session ends.
 - Search terms are sent directly to Nominatim.
 - Coordinates used for road connections are sent directly to OSRM or the user-selected Mapbox service.
 - There is no Wayfare account, database, or application server.
+- Base64 copy/paste and animated QR transfers happen locally; Wayfare does not upload the transferred data.
+- The in-app Privacy page explains local storage, required map-provider requests, sharing, and optional vendors.
+- Cloudflare Web Analytics and Google AdSense are loaded only when configured at build time **and** permitted by the visitor in the cookie banner/privacy settings.
 
 Browser storage is limited. For journeys containing many photographs, use compressed images and periodically export the journey.
 
@@ -115,9 +127,9 @@ npm run test:browser
 npm run build
 ```
 
-The unit tests cover reordering, distance calculation, GPX import/export (including endpoint places), malformed GPX handling, splitting a track at its closest coordinate, connecting imported tracks to adjacent places, Base64 sharing, URL-size warnings, box collisions, route intersection, callout placement, and connector geometry.
+The unit tests cover reordering, distance calculation, GPX import/export (including endpoint places), malformed GPX handling, splitting a track at its closest coordinate, connecting imported tracks to adjacent places, Base64 serialization, unordered multi-frame QR reconstruction and integrity checks, reversible item diffs, box collisions, route intersection, callout placement, and connector geometry.
 
-The Playwright suite covers desktop and mobile place editing, GPX import and endpoint editing, photograph controls, grouped settings, custom map sources, Help, every export preset, URL/QR sharing, and browser persistence. Search, routing, and map-style responses are mocked, so browser tests require no API key.
+The Playwright suite covers desktop and mobile place editing, GPX import and endpoint editing, photograph controls, grouped settings, custom map sources, Help, every export preset, Base64/animated-QR transfer, named journeys, browser-Back undo, privacy controls, and browser persistence. Search, routing, and map-style responses are mocked, so browser tests require no API key.
 
 ## GitHub Pages deployment
 
@@ -128,6 +140,16 @@ The Playwright suite covers desktop and mobile place editing, GPX import and end
 
 The included workflow installs dependencies, verifies formatting, runs unit and Chromium browser tests, creates the production build, and deploys `dist/`.
 
+Optional GitHub configuration:
+
+| GitHub setting                      | Vite build variable               | Purpose                                                 |
+| ----------------------------------- | --------------------------------- | ------------------------------------------------------- |
+| Secret `ADSENSE_CLIENT`             | `VITE_ADSENSE_CLIENT`             | Google AdSense publisher client, for example `ca-pub-…` |
+| Secret `CLOUDFLARE_ANALYTICS_TOKEN` | `VITE_CLOUDFLARE_ANALYTICS_TOKEN` | Cloudflare Web Analytics site token                     |
+| Variable `PUBLIC_SITE_URL`          | `VITE_PUBLIC_SITE_URL`            | Absolute production URL used for the canonical SEO link |
+
+Leave any value empty to omit that integration. AdSense is suitable for Auto ads; configure placement and site approval in the AdSense account. Optional vendor scripts are injected only after consent. Public frontend build variables are never secret at runtime even when supplied through GitHub Secrets.
+
 Vite uses relative asset paths, so the build supports both root domains and GitHub repository subpaths.
 
 ## Responsive layout
@@ -136,6 +158,10 @@ On tablets and phones, a compact map appears first while the beginning of the jo
 
 ## Sharing a complete journey
 
-Choose **Share** to serialize journey items, GPX coordinates, endpoint places, appearance settings, descriptions, and photographs into URL-safe Base64 in the `journey` query parameter. Opening that URL on another browser imports the complete configuration for continued editing. The Mapbox session token is deliberately excluded.
+Choose **Share** to serialize the journey name, items, GPX coordinates, endpoint places, appearance settings, descriptions, and photographs into URL-safe Base64. The code is displayed for copying and pasting; it is deliberately not placed in the page URL. Loading a code creates a new local journey so it does not overwrite existing work. The Mapbox session token is deliberately excluded.
 
-The Share dialog generates the QR code entirely in the browser. Because QR codes and browsers have practical URL-size limits, Wayfare warns and suppresses the QR code when photographs make the URL too large. The full URL can still be copied, but for reliable QR sharing use no photographs or one small photograph.
+For phone-to-phone transfer, the same dialog divides the code into numbered QR frames. The sender repeats them in a loop. The receiver collects frames in any order, ignores repeats, waits for missed frames to appear again, and validates a checksum before importing. In-page scanning uses the browser Barcode Detector API and camera permission over HTTPS; copy/paste is the universal fallback. This is fault-tolerant against missed frames, but it is not an internet transfer and both devices must remain present until completion.
+
+## Search and generative-engine discoverability
+
+The static entry page contains a concise description, robots directives, Open Graph metadata, relevant keywords, a no-script explanation, and `SoftwareApplication` JSON-LD. Set `PUBLIC_SITE_URL` in GitHub to add the correct canonical URL without hard-coding a repository name.

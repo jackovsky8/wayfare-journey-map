@@ -6,6 +6,8 @@ import {
   GripVertical,
   ImageDown,
   ImagePlus,
+  FolderOpen,
+  History,
   KeyRound,
   Layers3,
   LocateFixed,
@@ -22,6 +24,7 @@ import {
   SlidersHorizontal,
   Trash2,
   Type,
+  Undo2,
   Upload,
   X,
 } from "lucide-react";
@@ -38,7 +41,13 @@ import {
   resizeImage,
   splitTrackAtPlace,
 } from "./lib/journey";
-import { decodeJourney, journeyUrl, shareSizeWarning } from "./lib/share";
+import {
+  acceptQrFrame,
+  createQrFrames,
+  decodeJourney,
+  encodeJourney,
+} from "./lib/share";
+import { applyDiff, createItemsDiff, type JourneyDiff } from "./lib/history";
 import { BUILT_IN_MAPS, findMap } from "./lib/maps";
 import {
   routeWithMapbox,
@@ -50,6 +59,7 @@ import type {
   AppSettings,
   GpxTrack,
   JourneyItem,
+  JourneyDocument,
   MapSource,
   MapSourceKind,
   MarkerKind,
@@ -61,6 +71,9 @@ import type {
 
 const STORAGE_KEY = "wayfare.journey.v2";
 const SETTINGS_KEY = "wayfare.settings.v2";
+const LIBRARY_KEY = "wayfare.journeys.v3";
+const ACTIVE_KEY = "wayfare.active-journey.v3";
+const HISTORY_KEY = "wayfare.history.v1";
 const emptyRoute: RouteGeometry = {
   coordinates: [],
   distanceMeters: 0,
@@ -227,15 +240,6 @@ const defaults: AppSettings = {
   customMaps: [],
 };
 
-function sharedFromUrl() {
-  try {
-    const encoded = new URLSearchParams(location.search).get("journey");
-    return encoded ? decodeJourney(encoded) : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 const defaultPhoto = (dataUrl: string, fileName: string): PhotoStyle => ({
   dataUrl,
   fileName,
@@ -246,8 +250,12 @@ const defaultPhoto = (dataUrl: string, fileName: string): PhotoStyle => ({
 
 function loadItems(): JourneyItem[] {
   try {
-    const shared = sharedFromUrl();
-    if (shared) return shared.items;
+    const library = loadJourneyLibrary();
+    if (library.length) {
+      const active = localStorage.getItem(ACTIVE_KEY);
+      return (library.find((journey) => journey.id === active) ?? library[0])
+        .items;
+    }
     const current = JSON.parse(
       localStorage.getItem(STORAGE_KEY) || "[]",
     ) as JourneyItem[];
@@ -272,24 +280,23 @@ function loadItems(): JourneyItem[] {
 
 function loadSettings(): AppSettings {
   try {
-    const shared = sharedFromUrl();
     const saved = JSON.parse(
       localStorage.getItem(SETTINGS_KEY) || "{}",
     ) as Partial<AppSettings>;
     return {
       ...defaults,
-      ...(shared?.settings ?? saved),
+      ...saved,
       labels: {
         ...defaults.labels,
-        ...(shared?.settings.labels ?? saved.labels),
+        ...saved.labels,
       },
       photos: {
         ...defaults.photos,
-        ...(shared?.settings.photos ?? saved.photos),
+        ...saved.photos,
       },
       callouts: {
         ...defaults.callouts,
-        ...(shared?.settings.callouts ?? saved.callouts),
+        ...saved.callouts,
       },
       mapboxToken: sessionStorage.getItem("wayfare.mapbox") || "",
     };
@@ -298,8 +305,59 @@ function loadSettings(): AppSettings {
   }
 }
 
+function loadStoredSettings(): Omit<AppSettings, "mapboxToken"> {
+  const { mapboxToken: _token, ...safe } = loadSettings();
+  return safe;
+}
+
+type StoredJourney = JourneyDocument & {
+  history: JourneyDiff[];
+  settings?: Omit<AppSettings, "mapboxToken">;
+};
+
+function loadJourneyLibrary(): StoredJourney[] {
+  try {
+    return JSON.parse(
+      localStorage.getItem(LIBRARY_KEY) || "[]",
+    ) as StoredJourney[];
+  } catch {
+    return [];
+  }
+}
+
+function initialJourney(): StoredJourney {
+  const library = loadJourneyLibrary();
+  if (library.length) {
+    const active = localStorage.getItem(ACTIVE_KEY);
+    return library.find((journey) => journey.id === active) ?? library[0];
+  }
+  const now = new Date().toISOString();
+  return {
+    id: crypto.randomUUID(),
+    name: "My journey",
+    items: loadItems(),
+    createdAt: now,
+    updatedAt: now,
+    history: [],
+    settings: loadStoredSettings(),
+  };
+}
+
 export function App() {
-  const [items, setItems] = useState<JourneyItem[]>(loadItems);
+  const [journey, setJourney] = useState<StoredJourney>(initialJourney);
+  const journeyRef = useRef(journey);
+  journeyRef.current = journey;
+  const items = journey.items;
+  const [journeysOpen, setJourneysOpen] = useState(false);
+  const [, setLibraryRevision] = useState(0);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [importCode, setImportCode] = useState("");
+  const [qrPlaying, setQrPlaying] = useState(false);
+  const [qrFrameIndex, setQrFrameIndex] = useState(0);
+  const [qrScanning, setQrScanning] = useState(false);
+  const [qrProgress, setQrProgress] = useState(0);
+  const [privacyOpen, setPrivacyOpen] = useState(false);
+  const [privacySettingsOpen, setPrivacySettingsOpen] = useState(false);
   const [route, setRoute] = useState<RouteGeometry>(emptyRoute);
   const [settings, setSettings] = useState<AppSettings>(loadSettings);
   const [query, setQuery] = useState("");
@@ -331,6 +389,10 @@ export function App() {
   });
   const mapRef = useRef<JourneyMapHandle>(null);
   const gpxInputRef = useRef<HTMLInputElement>(null);
+  const scannerVideoRef = useRef<HTMLVideoElement>(null);
+  const scannerStreamRef = useRef<MediaStream | null>(null);
+  const qrFramesRef = useRef(new globalThis.Map<number, string>());
+  const qrTransferRef = useRef<string | undefined>(undefined);
 
   const places = useMemo(
     () => items.filter((item): item is Place => item.type === "place"),
@@ -359,38 +421,101 @@ export function App() {
     const { mapboxToken: _token, ...safe } = settings;
     return safe;
   }, [settings]);
-  const sharedUrl = useMemo(
-    () => journeyUrl({ version: 1, items, settings: safeSettings }, location),
-    [items, safeSettings],
+  const serializedJourney = useMemo(
+    () =>
+      encodeJourney({
+        version: 2,
+        name: journey.name,
+        items,
+        settings: safeSettings,
+      }),
+    [items, journey.name, safeSettings],
   );
-  const photoCount = mapPlaces.filter((place) => place.photo).length;
-  const shareWarning = shareSizeWarning(sharedUrl, photoCount);
+  const qrFrames = useMemo(
+    () => createQrFrames(serializedJourney),
+    [serializedJourney],
+  );
   const qrDataUrl = useMemo(() => {
-    if (shareWarning) return "";
     try {
       const qr = qrcode(0, "M");
-      qr.addData(sharedUrl, "Byte");
+      qr.addData(qrFrames[qrFrameIndex % qrFrames.length], "Byte");
       qr.make();
       return qr.createDataURL(5, 8);
     } catch {
       return "";
     }
-  }, [sharedUrl, shareWarning]);
+  }, [qrFrames, qrFrameIndex]);
+
+  const commitItems = (
+    updater: JourneyItem[] | ((current: JourneyItem[]) => JourneyItem[]),
+    label = "Edit journey",
+  ) => {
+    const current = journeyRef.current;
+    const nextItems =
+      typeof updater === "function" ? updater(current.items) : updater;
+    const diff = createItemsDiff(current.items, nextItems, label);
+    if (!diff) return;
+    window.history.pushState({ wayfare: diff.id }, "");
+    const next = {
+      ...current,
+      items: nextItems,
+      updatedAt: new Date().toISOString(),
+      history: [...current.history, diff].slice(-200),
+    };
+    journeyRef.current = next;
+    setJourney(next);
+  };
+
+  const undo = () => {
+    const current = journeyRef.current;
+    const diff = current.history.at(-1);
+    if (!diff) return;
+    const next = {
+      ...current,
+      items: applyDiff(current.items, diff, "backward"),
+      updatedAt: new Date().toISOString(),
+      history: current.history.slice(0, -1),
+    };
+    journeyRef.current = next;
+    setJourney(next);
+  };
 
   useEffect(() => {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+      const { mapboxToken: _token, ...journeySettings } = settings;
+      const persisted = { ...journey, settings: journeySettings };
+      const library = loadJourneyLibrary();
+      const next = library.some((entry) => entry.id === journey.id)
+        ? library.map((entry) => (entry.id === journey.id ? persisted : entry))
+        : [...library, persisted];
+      localStorage.setItem(LIBRARY_KEY, JSON.stringify(next));
+      localStorage.setItem(ACTIVE_KEY, journey.id);
     } catch {
       setNotice(
         "Browser storage is full. Remove some photographs or export your journey before continuing.",
       );
     }
-  }, [items]);
+  }, [journey, settings]);
   useEffect(() => {
     const { mapboxToken: _token, ...safe } = settings;
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(safe));
     sessionStorage.setItem("wayfare.mapbox", settings.mapboxToken);
   }, [settings]);
+
+  useEffect(() => {
+    const onPopState = () => undo();
+    addEventListener("popstate", onPopState);
+    return () => removeEventListener("popstate", onPopState);
+  });
+
+  useEffect(() => {
+    if (!qrPlaying || qrFrames.length < 2) return;
+    const interval = window.setInterval(
+      () => setQrFrameIndex((current) => (current + 1) % qrFrames.length),
+      550,
+    );
+    return () => clearInterval(interval);
+  }, [qrPlaying, qrFrames.length]);
 
   useEffect(() => {
     if (query.trim().length < 2) {
@@ -497,17 +622,25 @@ export function App() {
   }, [items, settings.provider, settings.mapboxToken]);
 
   const updatePlace = (id: string, patch: Partial<Place>) =>
-    setItems((current) =>
-      current.map((item) =>
-        item.id === id && item.type === "place" ? { ...item, ...patch } : item,
-      ),
+    commitItems(
+      (current) =>
+        current.map((item) =>
+          item.id === id && item.type === "place"
+            ? { ...item, ...patch }
+            : item,
+        ),
+      "Edit place",
     );
 
   const updateTrack = (id: string, patch: Partial<GpxTrack>) =>
-    setItems((current) =>
-      current.map((item) =>
-        item.id === id && item.type === "track" ? { ...item, ...patch } : item,
-      ),
+    commitItems(
+      (current) =>
+        current.map((item) =>
+          item.id === id && item.type === "track"
+            ? { ...item, ...patch }
+            : item,
+        ),
+      "Edit GPX track",
     );
 
   const endpointFor = (track: GpxTrack, end: "start" | "end"): Place => {
@@ -535,8 +668,10 @@ export function App() {
         description: "",
         marker: "pin",
       });
-      setItems((current) =>
-        current.flatMap((item) => (item.id === track.id ? split : [item])),
+      commitItems(
+        (current) =>
+          current.flatMap((item) => (item.id === track.id ? split : [item])),
+        `Split ${track.name}`,
       );
       setEditingTrack(null);
       setTrackQuery("");
@@ -560,11 +695,11 @@ export function App() {
       description: "",
       marker: "pin",
     };
-    setItems((current) => {
+    commitItems((current) => {
       const copy = [...current];
       copy.splice(insertAt ?? current.length, 0, place);
       return copy;
-    });
+    }, `Add ${place.name}`);
     setQuery("");
     setResults([]);
     setInsertAt(null);
@@ -575,11 +710,11 @@ export function App() {
     if (!file) return;
     try {
       const track = parseGpx(await file.text(), file.name);
-      setItems((current) => {
+      commitItems((current) => {
         const copy = [...current];
         copy.splice(insertAt ?? current.length, 0, track);
         return copy;
-      });
+      }, `Import ${track.name}`);
       setInsertAt(null);
       setNotice(
         `Added “${track.name}” with ${track.coordinates.length.toLocaleString()} track points.`,
@@ -635,6 +770,135 @@ export function App() {
     setNewMap({ name: "", kind: "style", url: "", attribution: "" });
   };
 
+  const importSerializedJourney = (encoded: string) => {
+    try {
+      const decoded = decodeJourney(encoded.trim());
+      const now = new Date().toISOString();
+      setJourney({
+        id: crypto.randomUUID(),
+        name: decoded.name,
+        items: decoded.items,
+        createdAt: now,
+        updatedAt: now,
+        history: [],
+      });
+      setSettings((current) => ({
+        ...defaults,
+        ...decoded.settings,
+        labels: { ...defaults.labels, ...decoded.settings.labels },
+        photos: { ...defaults.photos, ...decoded.settings.photos },
+        callouts: { ...defaults.callouts, ...decoded.settings.callouts },
+        mapboxToken: current.mapboxToken,
+      }));
+      setImportCode("");
+      setShareOpen(false);
+      setNotice(`Imported “${decoded.name}” as a new journey.`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Import failed.");
+    }
+  };
+
+  const createJourney = () => {
+    const now = new Date().toISOString();
+    setJourney({
+      id: crypto.randomUUID(),
+      name: "New journey",
+      items: [],
+      createdAt: now,
+      updatedAt: now,
+      history: [],
+      settings: safeSettings,
+    });
+    setJourneysOpen(false);
+  };
+
+  const selectJourney = (selected: StoredJourney) => {
+    setJourney(selected);
+    if (selected.settings)
+      setSettings((current) => ({
+        ...defaults,
+        ...selected.settings,
+        labels: { ...defaults.labels, ...selected.settings?.labels },
+        photos: { ...defaults.photos, ...selected.settings?.photos },
+        callouts: { ...defaults.callouts, ...selected.settings?.callouts },
+        mapboxToken: current.mapboxToken,
+      }));
+    setJourneysOpen(false);
+  };
+
+  const deleteJourney = (id: string) => {
+    const remaining = loadJourneyLibrary().filter((entry) => entry.id !== id);
+    localStorage.setItem(LIBRARY_KEY, JSON.stringify(remaining));
+    setLibraryRevision((current) => current + 1);
+    if (id === journey.id) {
+      if (remaining.length) setJourney(remaining[0]);
+      else createJourney();
+    }
+  };
+
+  const startQrScanner = async () => {
+    const Detector = (
+      window as unknown as {
+        BarcodeDetector?: new (options: { formats: string[] }) => {
+          detect: (
+            source: HTMLVideoElement,
+          ) => Promise<Array<{ rawValue: string }>>;
+        };
+      }
+    ).BarcodeDetector;
+    if (!Detector) {
+      setNotice(
+        "This browser cannot scan QR codes inside the page. Use the copy and paste journey code instead.",
+      );
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "environment" },
+      });
+      scannerStreamRef.current = stream;
+      setQrScanning(true);
+      qrFramesRef.current.clear();
+      qrTransferRef.current = undefined;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const video = scannerVideoRef.current;
+      if (!video) return;
+      video.srcObject = stream;
+      await video.play();
+      const detector = new Detector({ formats: ["qr_code"] });
+      const scan = async () => {
+        if (!video.srcObject) return;
+        try {
+          for (const code of await detector.detect(video)) {
+            const result = acceptQrFrame(
+              qrFramesRef.current,
+              code.rawValue,
+              qrTransferRef.current,
+            );
+            qrTransferRef.current = result.frame.transferId;
+            setQrProgress(qrFramesRef.current.size / result.frame.total);
+            if (result.complete) {
+              stream.getTracks().forEach((track) => track.stop());
+              scannerStreamRef.current = null;
+              setQrScanning(false);
+              importSerializedJourney(result.value);
+              return;
+            }
+          }
+        } catch {
+          // Other QR codes and repeated frames are safe to ignore.
+        }
+        requestAnimationFrame(() => void scan());
+      };
+      void scan();
+    } catch {
+      setQrScanning(false);
+      setNotice(
+        "Camera access was not available. Paste the journey code instead.",
+      );
+    }
+  };
+
   return (
     <main className="app-shell">
       <header className="topbar">
@@ -645,6 +909,31 @@ export function App() {
           <span>Wayfare</span>
         </div>
         <div className="top-actions">
+          <button
+            className="button ghost"
+            onClick={() => setJourneysOpen(true)}
+            aria-label="My journeys"
+          >
+            <FolderOpen size={17} />
+            <span>My journeys</span>
+          </button>
+          <button
+            className="button ghost"
+            onClick={() => setHistoryOpen(true)}
+            aria-label="Journey history"
+          >
+            <History size={17} />
+            <span>History</span>
+          </button>
+          <button
+            className="button ghost"
+            onClick={undo}
+            disabled={!journey.history.length}
+            aria-label="Undo last change"
+          >
+            <Undo2 size={17} />
+            <span>Undo</span>
+          </button>
           <button
             className="button ghost"
             onClick={() => setHelpOpen(true)}
@@ -685,7 +974,18 @@ export function App() {
         <aside className="journey-panel">
           <div className="panel-heading">
             <p className="eyebrow">Journey builder</p>
-            <h1>Tell the whole route.</h1>
+            <input
+              className="journey-name"
+              aria-label="Journey name"
+              value={journey.name}
+              onChange={(event) =>
+                setJourney((current) => ({
+                  ...current,
+                  name: event.target.value,
+                  updatedAt: new Date().toISOString(),
+                }))
+              }
+            />
             <p>
               Mix places with recorded GPX tracks, then add notes and
               photographs.
@@ -782,7 +1082,10 @@ export function App() {
                     onDragOver={(event) => event.preventDefault()}
                     onDrop={() => {
                       if (dragged !== null)
-                        setItems(moveItem(items, dragged, index));
+                        commitItems(
+                          moveItem(items, dragged, index),
+                          `Move ${item.name}`,
+                        );
                       setDragged(null);
                     }}
                   >
@@ -794,12 +1097,14 @@ export function App() {
                       <input
                         value={item.name}
                         onChange={(event) =>
-                          setItems((current) =>
-                            current.map((entry) =>
-                              entry.id === item.id
-                                ? { ...entry, name: event.target.value }
-                                : entry,
-                            ),
+                          commitItems(
+                            (current) =>
+                              current.map((entry) =>
+                                entry.id === item.id
+                                  ? { ...entry, name: event.target.value }
+                                  : entry,
+                              ),
+                            `Rename ${item.name}`,
                           )
                         }
                         aria-label={`Name for item ${index + 1}`}
@@ -826,8 +1131,10 @@ export function App() {
                     <button
                       className="icon-button danger"
                       onClick={() =>
-                        setItems((current) =>
-                          current.filter((entry) => entry.id !== item.id),
+                        commitItems(
+                          (current) =>
+                            current.filter((entry) => entry.id !== item.id),
+                          `Delete ${item.name}`,
                         )
                       }
                       aria-label={`Delete ${item.name}`}
@@ -1629,38 +1936,158 @@ export function App() {
 
       {shareOpen && (
         <Modal
-          title="Share journey"
-          eyebrow="Continue anywhere"
-          onClose={() => setShareOpen(false)}
+          title="Transfer journey"
+          eyebrow="Share or load"
+          onClose={() => {
+            setShareOpen(false);
+            setQrPlaying(false);
+            scannerStreamRef.current
+              ?.getTracks()
+              .forEach((track) => track.stop());
+            scannerStreamRef.current = null;
+            setQrScanning(false);
+          }}
+          wide
         >
-          <div className="share-panel">
-            {qrDataUrl ? (
-              <img
-                src={qrDataUrl}
-                alt="QR code containing the shared journey URL"
-                className="share-qr"
-              />
-            ) : (
-              <div className="qr-unavailable">
-                <QrCode size={32} />
-                QR code unavailable
-              </div>
-            )}
-            {shareWarning && <p className="share-warning">{shareWarning}</p>}
-            <label>
-              Shareable URL
-              <textarea readOnly value={sharedUrl} rows={4} />
-            </label>
-            <button
-              className="button dark"
-              onClick={() => void navigator.clipboard.writeText(sharedUrl)}
-            >
-              Copy link
+          <div className="transfer-grid">
+            <section className="transfer-section">
+              <h3>Copy or paste</h3>
+              <p>
+                The code contains the journey name, places, tracks, styles, and
+                photographs. It is not uploaded or put into a URL.
+              </p>
+              <label>
+                Journey code
+                <textarea readOnly value={serializedJourney} rows={5} />
+              </label>
+              <button
+                className="button dark"
+                onClick={() =>
+                  void navigator.clipboard.writeText(serializedJourney)
+                }
+              >
+                Copy journey code
+              </button>
+              <label>
+                Load a copied code
+                <textarea
+                  value={importCode}
+                  onChange={(event) => setImportCode(event.target.value)}
+                  rows={5}
+                  placeholder="Paste a Wayfare journey code…"
+                />
+              </label>
+              <button
+                className="button primary"
+                disabled={!importCode.trim()}
+                onClick={() => importSerializedJourney(importCode)}
+              >
+                Load as new journey
+              </button>
+            </section>
+            <section className="transfer-section qr-transfer">
+              <h3>Animated QR transfer</h3>
+              <p>
+                {qrFrames.length} numbered frames repeat in a loop. The
+                receiving phone accepts them in any order and waits for missed
+                frames, then verifies the complete data.
+              </p>
+              {qrDataUrl && (
+                <img
+                  src={qrDataUrl}
+                  alt={`Journey QR frame ${qrFrameIndex + 1} of ${qrFrames.length}`}
+                  className="share-qr"
+                />
+              )}
+              <strong className="qr-counter">
+                Frame {qrFrameIndex + 1} / {qrFrames.length}
+              </strong>
+              <button
+                className="button dark"
+                onClick={() => setQrPlaying((current) => !current)}
+              >
+                <QrCode size={16} />
+                {qrPlaying ? "Pause frames" : "Start repeating frames"}
+              </button>
+              <button className="button ghost" onClick={startQrScanner}>
+                Scan frames with this device
+              </button>
+              {qrScanning && (
+                <div className="qr-scanner">
+                  <video ref={scannerVideoRef} muted playsInline />
+                  <progress value={qrProgress} max={1} />
+                  <span>{Math.round(qrProgress * 100)}% received</span>
+                </div>
+              )}
+              <p className="field-help">
+                Keep both screens awake. Camera scanning requires HTTPS and a
+                browser with the Barcode Detector API; copy/paste works
+                everywhere.
+              </p>
+            </section>
+          </div>
+        </Modal>
+      )}
+
+      {journeysOpen && (
+        <Modal
+          title="My journeys"
+          eyebrow="Saved in this browser"
+          onClose={() => setJourneysOpen(false)}
+        >
+          <div className="journey-library">
+            {loadJourneyLibrary().map((saved) => (
+              <article
+                key={saved.id}
+                className={saved.id === journey.id ? "active" : ""}
+              >
+                <button onClick={() => selectJourney(saved)}>
+                  <strong>{saved.name}</strong>
+                  <small>
+                    {saved.items.length} items · updated{" "}
+                    {new Date(saved.updatedAt).toLocaleDateString()}
+                  </small>
+                </button>
+                <button
+                  className="icon-button danger"
+                  aria-label={`Delete journey ${saved.name}`}
+                  onClick={() => deleteJourney(saved.id)}
+                >
+                  <Trash2 size={16} />
+                </button>
+              </article>
+            ))}
+            <button className="button primary" onClick={createJourney}>
+              <Plus size={16} /> New journey
             </button>
+          </div>
+        </Modal>
+      )}
+
+      {historyOpen && (
+        <Modal
+          title="Journey history"
+          eyebrow="Reversible changes"
+          onClose={() => setHistoryOpen(false)}
+        >
+          <div className="history-list">
+            {!journey.history.length && <p>No changes to undo yet.</p>}
+            {[...journey.history].reverse().map((entry, index) => (
+              <article key={entry.id}>
+                <span>
+                  <strong>{entry.label}</strong>
+                  <small>{new Date(entry.at).toLocaleString()}</small>
+                </span>
+                {index === 0 && (
+                  <button className="button ghost" onClick={undo}>
+                    <Undo2 size={15} /> Undo
+                  </button>
+                )}
+              </article>
+            ))}
             <p className="field-help">
-              The URL contains the complete journey and settings, including
-              photographs. Anyone with the link can open and continue editing
-              it.
+              History stores compact item changes, not complete snapshots. The
+              browser Back button also undoes the latest change.
             </p>
           </div>
         </Modal>
@@ -1707,9 +2134,15 @@ export function App() {
               aspect ratio. You can also export the connected route as GPX.
             </HelpStep>
             <HelpStep number="7" title="Share and continue">
-              Share creates a URL containing the journey and settings. Copy it
-              or scan the local QR code on another device. Wayfare warns when
-              photographs make the link too large for reliable QR scanning.
+              Transfer keeps large data out of the URL. Copy and paste the
+              Base64 journey code, or play its numbered QR frames while the
+              other device scans. Frames repeat, can arrive in any order, and
+              are checked before the journey is loaded.
+            </HelpStep>
+            <HelpStep number="8" title="Keep several journeys">
+              Give each journey a name and switch in My journeys. Every edit is
+              saved locally as a reversible change. Use Undo, History, or the
+              browser Back button—including after splitting a GPX track.
             </HelpStep>
           </div>
           <div className="help-note">
@@ -1717,8 +2150,15 @@ export function App() {
             <p>
               Your journey, settings, descriptions, and resized photographs
               remain in this browser. Search and routing requests go directly to
-              the selected providers.
+              the selected providers. Optional analytics and advertising remain
+              disabled until you consent.
             </p>
+            <button
+              className="button ghost"
+              onClick={() => setPrivacyOpen(true)}
+            >
+              Read privacy information
+            </button>
           </div>
         </Modal>
       )}
@@ -1800,8 +2240,264 @@ export function App() {
           </p>
         </Modal>
       )}
+      <footer className="site-footer">
+        <a href="privacy.html">Privacy</a>
+        <button onClick={() => setPrivacySettingsOpen(true)}>
+          Privacy settings
+        </button>
+      </footer>
+      <PrivacyCenter
+        open={privacyOpen || privacySettingsOpen}
+        settingsOnly={privacySettingsOpen}
+        onClose={() => {
+          setPrivacyOpen(false);
+          setPrivacySettingsOpen(false);
+        }}
+      />
+      <ConsentBanner onSettings={() => setPrivacySettingsOpen(true)} />
+      <OptionalVendors />
     </main>
   );
+}
+
+type ConsentChoice = { analytics: boolean; ads: boolean };
+const CONSENT_KEY = "wayfare.consent.v1";
+
+function readConsent(): ConsentChoice | undefined {
+  try {
+    const value = localStorage.getItem(CONSENT_KEY);
+    return value ? (JSON.parse(value) as ConsentChoice) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function saveConsent(choice: ConsentChoice) {
+  localStorage.setItem(CONSENT_KEY, JSON.stringify(choice));
+  dispatchEvent(new CustomEvent("wayfare-consent", { detail: choice }));
+}
+
+function ConsentBanner({ onSettings }: { onSettings: () => void }) {
+  const [visible, setVisible] = useState(() => !readConsent());
+  if (!visible) return null;
+  return (
+    <section className="consent-banner" aria-label="Cookie consent">
+      <div>
+        <strong>Your journey stays on this device</strong>
+        <p>
+          Optional Cloudflare analytics and Google advertising load only with
+          your permission. Core map functions do not require consent cookies.
+        </p>
+      </div>
+      <div className="consent-actions">
+        <button
+          className="button ghost"
+          onClick={() => {
+            saveConsent({ analytics: false, ads: false });
+            setVisible(false);
+          }}
+        >
+          Necessary only
+        </button>
+        <button className="button ghost" onClick={onSettings}>
+          Choose settings
+        </button>
+        <button
+          className="button dark"
+          onClick={() => {
+            saveConsent({ analytics: true, ads: true });
+            setVisible(false);
+          }}
+        >
+          Accept optional services
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function PrivacyCenter({
+  open,
+  settingsOnly,
+  onClose,
+}: {
+  open: boolean;
+  settingsOnly: boolean;
+  onClose: () => void;
+}) {
+  const [choice, setChoice] = useState<ConsentChoice>(
+    () => readConsent() ?? { analytics: false, ads: false },
+  );
+  if (!open) return null;
+  return (
+    <Modal
+      title={settingsOnly ? "Privacy settings" : "Privacy"}
+      eyebrow="Your data, your choice"
+      onClose={onClose}
+      wide
+    >
+      {!settingsOnly && (
+        <div className="privacy-copy">
+          <h3>Data stored on your device</h3>
+          <p>
+            Journey names, places, descriptions, GPX coordinates, editing
+            history, display settings, and resized photographs are stored in
+            your browser. Wayfare has no application backend and does not upload
+            this content. Clearing site data removes it from that browser.
+          </p>
+          <h3>Requests needed for the map</h3>
+          <p>
+            Your browser requests map tiles, place search, and routing directly
+            from the provider selected in Settings. Those providers receive the
+            usual technical request information, such as your IP address. A
+            Mapbox token, when supplied, is kept for the browser session.
+          </p>
+          <h3>Sharing</h3>
+          <p>
+            Copy/paste and animated QR transfer are generated locally. The
+            journey code contains everything visible in the journey, including
+            photographs; share it only with people you trust.
+          </p>
+          <h3>Optional vendors</h3>
+          <p>
+            If configured by the site owner and permitted below, Cloudflare Web
+            Analytics measures visits and Google AdSense supplies advertising.
+            See the vendors’ own privacy controls:
+          </p>
+          <ul>
+            <li>
+              <a
+                href="https://policies.google.com/privacy"
+                target="_blank"
+                rel="noreferrer"
+              >
+                Google privacy policy
+              </a>{" "}
+              and{" "}
+              <a
+                href="https://myadcenter.google.com/"
+                target="_blank"
+                rel="noreferrer"
+              >
+                My Ad Center
+              </a>
+            </li>
+            <li>
+              <a
+                href="https://www.cloudflare.com/privacypolicy/"
+                target="_blank"
+                rel="noreferrer"
+              >
+                Cloudflare privacy policy
+              </a>
+            </li>
+          </ul>
+        </div>
+      )}
+      <div className="privacy-choices">
+        <label>
+          <input type="checkbox" checked disabled />
+          <span>
+            <strong>Necessary storage</strong>
+            <small>Journeys, settings, consent choice, and editor state.</small>
+          </span>
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={choice.analytics}
+            onChange={(event) =>
+              setChoice((current) => ({
+                ...current,
+                analytics: event.target.checked,
+              }))
+            }
+          />
+          <span>
+            <strong>Cloudflare Web Analytics</strong>
+            <small>Anonymous traffic and performance measurement.</small>
+          </span>
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={choice.ads}
+            onChange={(event) =>
+              setChoice((current) => ({
+                ...current,
+                ads: event.target.checked,
+              }))
+            }
+          />
+          <span>
+            <strong>Google AdSense</strong>
+            <small>Advertising and its related storage or identifiers.</small>
+          </span>
+        </label>
+        <button
+          className="button dark"
+          onClick={() => {
+            saveConsent(choice);
+            onClose();
+          }}
+        >
+          Save privacy settings
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+function OptionalVendors() {
+  const [choice, setChoice] = useState(readConsent);
+  useEffect(() => {
+    const siteUrl = import.meta.env.VITE_PUBLIC_SITE_URL;
+    if (!siteUrl) return;
+    let canonical = document.querySelector<HTMLLinkElement>(
+      'link[rel="canonical"]',
+    );
+    if (!canonical) {
+      canonical = document.createElement("link");
+      canonical.rel = "canonical";
+      document.head.append(canonical);
+    }
+    canonical.href = siteUrl;
+  }, []);
+  useEffect(() => {
+    const update = (event: Event) =>
+      setChoice((event as CustomEvent<ConsentChoice>).detail);
+    addEventListener("wayfare-consent", update);
+    return () => removeEventListener("wayfare-consent", update);
+  }, []);
+  useEffect(() => {
+    const analyticsToken = import.meta.env.VITE_CLOUDFLARE_ANALYTICS_TOKEN;
+    if (
+      choice?.analytics &&
+      analyticsToken &&
+      !document.getElementById("cf-analytics")
+    ) {
+      const script = document.createElement("script");
+      script.id = "cf-analytics";
+      script.defer = true;
+      script.src = "https://static.cloudflareinsights.com/beacon.min.js";
+      script.dataset.cfBeacon = JSON.stringify({ token: analyticsToken });
+      document.head.append(script);
+    }
+    const adsenseClient = import.meta.env.VITE_ADSENSE_CLIENT;
+    if (
+      choice?.ads &&
+      adsenseClient &&
+      !document.getElementById("google-adsense")
+    ) {
+      const script = document.createElement("script");
+      script.id = "google-adsense";
+      script.async = true;
+      script.crossOrigin = "anonymous";
+      script.src = `https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${encodeURIComponent(adsenseClient)}`;
+      document.head.append(script);
+    }
+  }, [choice]);
+  return null;
 }
 
 function EndpointFields({
