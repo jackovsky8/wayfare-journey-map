@@ -210,6 +210,22 @@ export interface LayoutMetrics {
   verticalOrderViolations: number;
 }
 
+// These bands deliberately make the objective lexicographic for realistic
+// journey sizes: collision freedom first, then unambiguous connectors and
+// spatial order, followed by route clearance and distance.
+const COST = {
+  overlap: 100_000_000_000_000,
+  overlapArea: 100_000_000,
+  connectorBox: 10_000_000_000_000,
+  connectorCrossing: 8_000_000_000_000,
+  orderViolation: 6_000_000_000_000,
+  routeIntersection: 4_000_000_000_000,
+  overflow: 100_000_000_000,
+} as const;
+
+const violatesOrder = (anchorDelta: number, boxDelta: number) =>
+  Math.abs(anchorDelta) > 2 && anchorDelta * boxDelta <= 0;
+
 export function measureLayout(
   placements: CalloutPlacement[],
   route: Point[],
@@ -254,10 +270,9 @@ export function measureLayout(
       // Ignore virtually aligned anchors. Otherwise preserve their spatial
       // order so a viewer can associate labels with pins before following a
       // connector.
-      if (Math.abs(anchorDx) > 2 && anchorDx * boxDx < 0)
+      if (violatesOrder(anchorDx, boxDx))
         metrics.horizontalOrderViolations += 1;
-      if (Math.abs(anchorDy) > 2 && anchorDy * boxDy < 0)
-        metrics.verticalOrderViolations += 1;
+      if (violatesOrder(anchorDy, boxDy)) metrics.verticalOrderViolations += 1;
       if (boxesOverlap(a.box, b.box, padding)) metrics.overlaps += 1;
       if (
         segmentsCross(
@@ -294,14 +309,14 @@ const scoreLayout = (
         padding,
       );
   return (
-    metrics.overlaps * 1_000_000_000 +
-    overlapSeverity * 1_000_000 +
-    metrics.routeIntersections * 300_000_000 +
-    metrics.connectorBoxIntersections * 150_000_000 +
-    metrics.connectorCrossings * 10_000_000 +
-    metrics.horizontalOrderViolations * 7_500_000 +
-    metrics.verticalOrderViolations * 7_500_000 +
-    metrics.overflow * 20_000_000 +
+    metrics.overlaps * COST.overlap +
+    overlapSeverity * COST.overlapArea +
+    metrics.routeIntersections * COST.routeIntersection +
+    metrics.connectorBoxIntersections * COST.connectorBox +
+    metrics.connectorCrossings * COST.connectorCrossing +
+    metrics.horizontalOrderViolations * COST.orderViolation +
+    metrics.verticalOrderViolations * COST.orderViolation +
+    metrics.overflow * COST.overflow +
     metrics.totalDistance * 100 +
     metrics.maximumDistance * 25 +
     placements.reduce((sum, placement) => sum + placement.preference, 0) * 0.001
@@ -318,10 +333,10 @@ const unaryScore = (
   options: LayoutOptions,
 ) =>
   (boxIntersectsPolyline(candidate.box, route, options.routeClearance ?? 8)
-    ? 300_000_000
+    ? COST.routeIntersection
     : 0) +
   boxOverflow(candidate.box, viewport, options.viewportMargin ?? 8) *
-    20_000_000 +
+    COST.overflow +
   candidate.distance * 100 +
   candidate.preference * 0.001;
 
@@ -332,13 +347,13 @@ const pairScore = (a: Candidate, b: Candidate, options: LayoutOptions) => {
   const boxDx = (a.box.left + a.box.right) / 2 - (b.box.left + b.box.right) / 2;
   const boxDy = (a.box.top + a.box.bottom) / 2 - (b.box.top + b.box.bottom) / 2;
   return (
-    (boxesOverlap(a.box, b.box, padding) ? 1_000_000_000 : 0) +
-    overlapArea(a.box, b.box, padding) * 1_000_000 +
+    (boxesOverlap(a.box, b.box, padding) ? COST.overlap : 0) +
+    overlapArea(a.box, b.box, padding) * COST.overlapArea +
     (segmentIntersectsBox(a.connectorStart, a.connectorEnd, b.box)
-      ? 150_000_000
+      ? COST.connectorBox
       : 0) +
     (segmentIntersectsBox(b.connectorStart, b.connectorEnd, a.box)
-      ? 150_000_000
+      ? COST.connectorBox
       : 0) +
     (segmentsCross(
       a.connectorStart,
@@ -346,10 +361,10 @@ const pairScore = (a: Candidate, b: Candidate, options: LayoutOptions) => {
       b.connectorStart,
       b.connectorEnd,
     )
-      ? 10_000_000
+      ? COST.connectorCrossing
       : 0) +
-    (Math.abs(anchorDx) > 2 && anchorDx * boxDx < 0 ? 7_500_000 : 0) +
-    (Math.abs(anchorDy) > 2 && anchorDy * boxDy < 0 ? 7_500_000 : 0)
+    (violatesOrder(anchorDx, boxDx) ? COST.orderViolation : 0) +
+    (violatesOrder(anchorDy, boxDy) ? COST.orderViolation : 0)
   );
 };
 
@@ -368,6 +383,53 @@ const localScore = (
       score += pairScore(candidate, placements[other], options);
   }
   return score;
+};
+
+const pairNeedsRepair = (
+  a: Candidate,
+  b: Candidate,
+  route: Point[],
+  options: LayoutOptions,
+) => {
+  const anchorDx = a.anchor.x - b.anchor.x;
+  const anchorDy = a.anchor.y - b.anchor.y;
+  const boxDx = (a.box.left + a.box.right) / 2 - (b.box.left + b.box.right) / 2;
+  const boxDy = (a.box.top + a.box.bottom) / 2 - (b.box.top + b.box.bottom) / 2;
+  return (
+    violatesOrder(anchorDx, boxDx) ||
+    violatesOrder(anchorDy, boxDy) ||
+    boxIntersectsPolyline(a.box, route, options.routeClearance ?? 8) ||
+    boxIntersectsPolyline(b.box, route, options.routeClearance ?? 8) ||
+    segmentIntersectsBox(a.connectorStart, a.connectorEnd, b.box) ||
+    segmentIntersectsBox(b.connectorStart, b.connectorEnd, a.box) ||
+    segmentsCross(
+      a.connectorStart,
+      a.connectorEnd,
+      b.connectorStart,
+      b.connectorEnd,
+    )
+  );
+};
+
+const pairedLocalScore = (
+  first: Candidate,
+  firstIndex: number,
+  second: Candidate,
+  secondIndex: number,
+  placements: Candidate[],
+  firstBase: number,
+  secondBase: number,
+  options: LayoutOptions,
+) => {
+  let maximumDistance = Math.max(first.distance, second.distance);
+  let score = firstBase + secondBase + pairScore(first, second, options);
+  for (let other = 0; other < placements.length; other += 1) {
+    if (other === firstIndex || other === secondIndex) continue;
+    maximumDistance = Math.max(maximumDistance, placements[other].distance);
+    score += pairScore(first, placements[other], options);
+    score += pairScore(second, placements[other], options);
+  }
+  return score + maximumDistance * 25;
 };
 
 const optimize = (
@@ -419,6 +481,62 @@ const optimize = (
         improved = true;
       }
     }
+    // Coordinate descent can become trapped when two labels must move
+    // together. Repair only inverted or crossing pairs, keeping the common
+    // case fast while providing a deterministic 2-opt escape.
+    let repairedPairs = 0;
+    for (
+      let firstIndex = 0;
+      firstIndex < placements.length && repairedPairs < 12;
+      firstIndex += 1
+    ) {
+      for (
+        let secondIndex = firstIndex + 1;
+        secondIndex < placements.length && repairedPairs < 12;
+        secondIndex += 1
+      ) {
+        if (
+          !pairNeedsRepair(
+            placements[firstIndex],
+            placements[secondIndex],
+            route,
+            options,
+          )
+        )
+          continue;
+        repairedPairs += 1;
+        let bestFirst = placements[firstIndex];
+        let bestSecond = placements[secondIndex];
+        let bestPairScore = Number.POSITIVE_INFINITY;
+        candidates[firstIndex].forEach((first, firstCandidateIndex) => {
+          candidates[secondIndex].forEach((second, secondCandidateIndex) => {
+            const candidateScore = pairedLocalScore(
+              first,
+              firstIndex,
+              second,
+              secondIndex,
+              placements,
+              unaryScores[firstIndex][firstCandidateIndex],
+              unaryScores[secondIndex][secondCandidateIndex],
+              options,
+            );
+            if (candidateScore < bestPairScore) {
+              bestPairScore = candidateScore;
+              bestFirst = first;
+              bestSecond = second;
+            }
+          });
+        });
+        if (
+          bestFirst !== placements[firstIndex] ||
+          bestSecond !== placements[secondIndex]
+        ) {
+          placements[firstIndex] = bestFirst;
+          placements[secondIndex] = bestSecond;
+          improved = true;
+        }
+      }
+    }
     score = scoreLayout(placements, route, viewport, options);
     const improvement = passStartScore - score;
     if (improved) onIteration?.(placements, (pass + 1) / passes);
@@ -433,8 +551,6 @@ export function layoutCalloutsFast(
   viewport: { width: number; height: number },
   options: LayoutOptions = {},
 ): CalloutPlacement[] {
-  const padding = options.padding ?? 10;
-  const clearance = options.routeClearance ?? 8;
   const margin = options.viewportMargin ?? 8;
   const placed: Candidate[] = [];
   const center = { x: viewport.width / 2, y: viewport.height / 2 };
@@ -458,34 +574,13 @@ export function layoutCalloutsFast(
     let best = candidates[0];
     let bestScore = Number.POSITIVE_INFINITY;
     candidates.forEach((candidate) => {
-      const overlaps = placed.filter((other) =>
-        boxesOverlap(candidate.box, other.box, padding),
-      ).length;
-      const connectorBoxes = placed.filter((other) =>
-        segmentIntersectsBox(
-          candidate.connectorStart,
-          candidate.connectorEnd,
-          other.box,
-        ),
-      ).length;
-      const connectorCrossings = placed.filter((other) =>
-        segmentsCross(
-          candidate.connectorStart,
-          candidate.connectorEnd,
-          other.connectorStart,
-          other.connectorEnd,
-        ),
-      ).length;
       const score =
-        overlaps * 1_000_000_000 +
-        (boxIntersectsPolyline(candidate.box, route, clearance)
-          ? 300_000_000
-          : 0) +
-        connectorBoxes * 150_000_000 +
-        connectorCrossings * 10_000_000 +
-        boxOverflow(candidate.box, viewport, margin) * 20_000_000 +
-        candidate.distance * 100 +
-        candidate.preference * 0.001;
+        unaryScore(candidate, route, viewport, options) +
+        candidate.distance * 25 +
+        placed.reduce(
+          (sum, other) => sum + pairScore(candidate, other, options),
+          0,
+        );
       if (score < bestScore) {
         best = candidate;
         bestScore = score;

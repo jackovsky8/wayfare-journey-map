@@ -157,6 +157,26 @@ describe("callout collision layout", () => {
     expect(metrics.verticalOrderViolations).toBe(0);
   });
 
+  it("prioritizes spatial order and uncrossed arrows in a dense diagonal", () => {
+    const viewport = { width: 520, height: 420 };
+    const placements = layoutCallouts(
+      [
+        { id: "a", anchor: { x: 120, y: 105 }, width: 105, height: 58 },
+        { id: "b", anchor: { x: 165, y: 140 }, width: 105, height: 58 },
+        { id: "c", anchor: { x: 215, y: 180 }, width: 105, height: 58 },
+        { id: "d", anchor: { x: 265, y: 220 }, width: 105, height: 58 },
+      ],
+      [],
+      viewport,
+      { optimizationPasses: 10, startingLayouts: 4 },
+    );
+    const metrics = measureLayout(placements, [], viewport);
+    expect(metrics.overlaps).toBe(0);
+    expect(metrics.connectorCrossings).toBe(0);
+    expect(metrics.horizontalOrderViolations).toBe(0);
+    expect(metrics.verticalOrderViolations).toBe(0);
+  });
+
   it("publishes improving layouts during refinement", () => {
     const iterations: number[] = [];
     layoutCallouts(
