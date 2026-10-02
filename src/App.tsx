@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   BookOpen,
-  ChevronUp,
   ChevronDown,
   Download,
   GripVertical,
@@ -51,6 +50,12 @@ import {
 import { applyDiff, createItemsDiff, type JourneyDiff } from "./lib/history";
 import { createAnimatedQrGif } from "./lib/share-gif";
 import { buildQrShareMessage } from "./lib/share-message";
+import {
+  deleteJourneyPhotos,
+  loadJourneyPhotos,
+  saveJourneyPhotos,
+  stripPhotoData,
+} from "./lib/photo-storage";
 import { BUILT_IN_MAPS, findMap } from "./lib/maps";
 import {
   routeWithMapbox,
@@ -346,6 +351,18 @@ function initialJourney(): StoredJourney {
   };
 }
 
+function stripStoredJourneyPhotos(journey: StoredJourney): StoredJourney {
+  return {
+    ...journey,
+    items: stripPhotoData(journey.items),
+    history: journey.history.map((diff) => ({
+      ...diff,
+      removed: stripPhotoData(diff.removed),
+      added: stripPhotoData(diff.added),
+    })),
+  };
+}
+
 export function App() {
   const [journey, setJourney] = useState<StoredJourney>(initialJourney);
   const journeyRef = useRef(journey);
@@ -382,14 +399,10 @@ export function App() {
     new URLSearchParams(location.search).has("import"),
   );
   const [sharingGif, setSharingGif] = useState(false);
-  const [coarsePointer, setCoarsePointer] = useState(
-    () => matchMedia("(pointer: coarse)").matches,
-  );
   const [routeStatus, setRouteStatus] = useState<
     "idle" | "routing" | "fallback"
   >("idle");
   const [notice, setNotice] = useState("");
-  const [dragged, setDragged] = useState<number | null>(null);
   const [newMap, setNewMap] = useState({
     name: "",
     kind: "style" as MapSourceKind,
@@ -402,6 +415,21 @@ export function App() {
   const scannerStreamRef = useRef<MediaStream | null>(null);
   const qrFramesRef = useRef(new globalThis.Map<number, string>());
   const qrTransferRef = useRef<string | undefined>(undefined);
+  const persistenceRevisionRef = useRef(0);
+
+  const closeShareDialog = () => {
+    setShareOpen(false);
+    setQrPlaying(false);
+    scannerStreamRef.current?.getTracks().forEach((track) => track.stop());
+    scannerStreamRef.current = null;
+    setQrScanning(false);
+    const url = new URL(location.href);
+    if (url.searchParams.has("import")) {
+      url.searchParams.delete("import");
+      const nextUrl = `${url.pathname}${url.search}${url.hash}`;
+      window.history.replaceState(window.history.state, "", nextUrl);
+    }
+  };
 
   const places = useMemo(
     () => items.filter((item): item is Place => item.type === "place"),
@@ -490,28 +518,56 @@ export function App() {
   };
 
   useEffect(() => {
-    const media = matchMedia("(pointer: coarse)");
-    const update = () => setCoarsePointer(media.matches);
-    media.addEventListener("change", update);
-    return () => media.removeEventListener("change", update);
-  }, []);
+    const revision = ++persistenceRevisionRef.current;
+    void (async () => {
+      try {
+        await saveJourneyPhotos(journey.id, journey.items);
+        if (revision !== persistenceRevisionRef.current) return;
+        const { mapboxToken: _token, ...journeySettings } = settings;
+        const persisted = stripStoredJourneyPhotos({
+          ...journey,
+          settings: journeySettings,
+        });
+        const library = loadJourneyLibrary();
+        await Promise.all(
+          library.map((entry) => saveJourneyPhotos(entry.id, entry.items)),
+        );
+        const compactLibrary = library.map(stripStoredJourneyPhotos);
+        const next = compactLibrary.some((entry) => entry.id === journey.id)
+          ? compactLibrary.map((entry) =>
+              entry.id === journey.id ? persisted : entry,
+            )
+          : [...compactLibrary, persisted];
+        localStorage.removeItem(STORAGE_KEY);
+        localStorage.removeItem("wayfare.journey.v1");
+        localStorage.setItem(LIBRARY_KEY, JSON.stringify(next));
+        localStorage.setItem(ACTIVE_KEY, journey.id);
+      } catch {
+        setNotice(
+          "Photographs could not be saved in this browser. Check available site storage or export the journey before clearing browser data.",
+        );
+      }
+    })();
+  }, [journey, settings]);
 
   useEffect(() => {
-    try {
-      const { mapboxToken: _token, ...journeySettings } = settings;
-      const persisted = { ...journey, settings: journeySettings };
-      const library = loadJourneyLibrary();
-      const next = library.some((entry) => entry.id === journey.id)
-        ? library.map((entry) => (entry.id === journey.id ? persisted : entry))
-        : [...library, persisted];
-      localStorage.setItem(LIBRARY_KEY, JSON.stringify(next));
-      localStorage.setItem(ACTIVE_KEY, journey.id);
-    } catch {
-      setNotice(
-        "Browser storage is full. Remove some photographs or export your journey before continuing.",
-      );
-    }
-  }, [journey, settings]);
+    let cancelled = false;
+    void loadJourneyPhotos(journey.id, journey.items)
+      .then((hydrated) => {
+        if (cancelled || hydrated === journey.items) return;
+        setJourney((current) =>
+          current.id === journey.id ? { ...current, items: hydrated } : current,
+        );
+      })
+      .catch(() => {
+        // A browser without IndexedDB can still use journeys without photos.
+      });
+    return () => {
+      cancelled = true;
+    };
+    // Hydrate once whenever another journey becomes active.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [journey.id]);
   useEffect(() => {
     const { mapboxToken: _token, ...safe } = settings;
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(safe));
@@ -807,7 +863,7 @@ export function App() {
         mapboxToken: current.mapboxToken,
       }));
       setImportCode("");
-      setShareOpen(false);
+      closeShareDialog();
       setNotice(`Imported “${decoded.name}” as a new journey.`);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Import failed.");
@@ -828,8 +884,11 @@ export function App() {
     setJourneysOpen(false);
   };
 
-  const selectJourney = (selected: StoredJourney) => {
-    setJourney(selected);
+  const selectJourney = async (selected: StoredJourney) => {
+    const hydrated = await loadJourneyPhotos(selected.id, selected.items).catch(
+      () => selected.items,
+    );
+    setJourney({ ...selected, items: hydrated });
     if (selected.settings)
       setSettings((current) => ({
         ...defaults,
@@ -845,6 +904,7 @@ export function App() {
   const deleteJourney = (id: string) => {
     const remaining = loadJourneyLibrary().filter((entry) => entry.id !== id);
     localStorage.setItem(LIBRARY_KEY, JSON.stringify(remaining));
+    void deleteJourneyPhotos(id).catch(() => undefined);
     setLibraryRevision((current) => current + 1);
     if (id === journey.id) {
       if (remaining.length) setJourney(remaining[0]);
@@ -1143,49 +1203,31 @@ export function App() {
               items.map((item, index) => (
                 <div key={item.id}>
                   <article
-                    className={`stop-card ${item.type === "track" ? "track-card" : ""} ${dragged === index ? "dragging" : ""}`}
-                    draggable={!coarsePointer}
-                    onDragStart={() => setDragged(index)}
-                    onDragOver={(event) => event.preventDefault()}
-                    onDrop={() => {
-                      if (dragged !== null)
-                        commitItems(
-                          moveItem(items, dragged, index),
-                          `Move ${item.name}`,
-                        );
-                      setDragged(null);
-                    }}
+                    className={`stop-card ${item.type === "track" ? "track-card" : ""}`}
                   >
-                    <GripVertical className="drag-handle" size={18} />
-                    <div
-                      className="mobile-reorder"
-                      aria-label={`Reorder ${item.name}`}
-                    >
-                      <button
-                        disabled={index === 0}
-                        onClick={() =>
+                    <label className="position-control">
+                      <GripVertical size={15} aria-hidden="true" />
+                      <span className="visually-hidden">
+                        Position for {item.name}
+                      </span>
+                      <select
+                        aria-label={`Position for ${item.name}`}
+                        value={index}
+                        onChange={(event) => {
+                          const nextIndex = Number(event.target.value);
                           commitItems(
-                            moveItem(items, index, index - 1),
-                            `Move ${item.name} up`,
-                          )
-                        }
-                        aria-label={`Move ${item.name} up`}
+                            moveItem(items, index, nextIndex),
+                            `Move ${item.name} to position ${nextIndex + 1}`,
+                          );
+                        }}
                       >
-                        <ChevronUp size={15} />
-                      </button>
-                      <button
-                        disabled={index === items.length - 1}
-                        onClick={() =>
-                          commitItems(
-                            moveItem(items, index, index + 1),
-                            `Move ${item.name} down`,
-                          )
-                        }
-                        aria-label={`Move ${item.name} down`}
-                      >
-                        <ChevronDown size={15} />
-                      </button>
-                    </div>
+                        {items.map((_, position) => (
+                          <option key={position} value={position}>
+                            {position + 1}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
                     <span className="stop-number">
                       {item.type === "track" ? <Route size={14} /> : index + 1}
                     </span>
@@ -2036,13 +2078,7 @@ export function App() {
           title="Transfer journey"
           eyebrow="Share or load"
           onClose={() => {
-            setShareOpen(false);
-            setQrPlaying(false);
-            scannerStreamRef.current
-              ?.getTracks()
-              .forEach((track) => track.stop());
-            scannerStreamRef.current = null;
-            setQrScanning(false);
+            closeShareDialog();
           }}
           wide
         >
@@ -2213,8 +2249,9 @@ export function App() {
         >
           <div className="help-grid">
             <HelpStep number="1" title="Build the sequence">
-              Search for places or import GPX files. Drag cards to reorder them,
-              or choose “Insert” between two items.
+              Search for places or import GPX files. Use the numbered position
+              selector on a card to move it directly, or choose “Insert” between
+              two items. The native selector also works reliably on Android.
             </HelpStep>
             <HelpStep number="2" title="Mix places and tracks">
               A GPX track keeps its recorded shape. Wayfare routes from the
@@ -2227,12 +2264,14 @@ export function App() {
               marker, and add a photograph.
             </HelpStep>
             <HelpStep number="4" title="Compose photographs">
-              Crop and zoom each image individually. Configure photo size,
-              frame, and rounding once in Photograph style; the same design is
-              used in the editor, map, and image export. Wayfare's geometry
-              engine places callouts near their places while avoiding the route,
-              map edge, and each other. A configurable arrow always links each
-              callout to its exact place.
+              Photos are resized and progressively compressed in this browser,
+              then stored in IndexedDB rather than the much smaller localStorage
+              quota. Crop and zoom each image individually. Configure photo
+              size, frame, and rounding once in Photograph style; the same
+              design is used in the editor, map, and image export. Wayfare's
+              geometry engine places callouts near their places while avoiding
+              the route, map edge, and each other. A configurable arrow always
+              links each callout to its exact place.
             </HelpStep>
             <HelpStep number="5" title="Style the map">
               Settings are grouped into background, route, labels, custom maps,
@@ -2434,9 +2473,11 @@ function PrivacyCenter({
           <h3>Data stored on your device</h3>
           <p>
             Journey names, places, descriptions, GPX coordinates, editing
-            history, display settings, and resized photographs are stored in
-            your browser. Wayfare has no application backend and does not upload
-            this content. Clearing site data removes it from that browser.
+            history, and display settings are stored as compact browser
+            metadata. Resized photographs are stored separately in IndexedDB so
+            several images do not exhaust localStorage. Wayfare has no
+            application backend and does not upload this content. Clearing site
+            data removes it from that browser.
           </p>
           <h3>Requests needed for the map</h3>
           <p>

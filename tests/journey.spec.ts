@@ -209,8 +209,14 @@ test("copies, loads, and animates a self-contained journey code", async ({
     Object.defineProperty(navigator, "share", {
       configurable: true,
       value: async (data: ShareData) => {
-        (window as unknown as { sharedGifType?: string }).sharedGifType =
-          data.files?.[0]?.type;
+        const capture = window as unknown as {
+          sharedGifType?: string;
+          sharedText?: string;
+          sharedUrl?: string;
+        };
+        capture.sharedGifType = data.files?.[0]?.type;
+        capture.sharedText = data.text;
+        capture.sharedUrl = data.url;
       },
     });
   });
@@ -224,6 +230,12 @@ test("copies, loads, and animates a self-contained journey code", async ({
       ),
     )
     .toBe("image/gif");
+  const shared = await page.evaluate(() => ({
+    text: (window as unknown as { sharedText?: string }).sharedText ?? "",
+    url: (window as unknown as { sharedUrl?: string }).sharedUrl,
+  }));
+  expect(shared.text.match(/https?:\/\//g)).toHaveLength(1);
+  expect(shared.url).toBeUndefined();
   const code = await page.getByLabel("Journey code").inputValue();
   await page.getByLabel("Load a copied code").fill(code);
   await page.getByRole("button", { name: "Load as new journey" }).click();
@@ -232,6 +244,8 @@ test("copies, loads, and animates a self-contained journey code", async ({
   await expect(
     page.getByRole("heading", { name: "Transfer journey" }),
   ).toBeVisible();
+  await page.getByRole("button", { name: "Close Transfer journey" }).click();
+  await expect(page).toHaveURL(/\/$/);
 });
 
 test("keeps named journeys and undoes with browser back", async ({ page }) => {
@@ -260,7 +274,7 @@ test("shows active vendors and privacy information", async ({ page }) => {
   ).toBeVisible();
 });
 
-test("reorders journey items with touch-safe controls", async ({
+test("reorders journey items with a native position control", async ({
   page,
 }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile", "Mobile interaction only");
@@ -268,9 +282,46 @@ test("reorders journey items with touch-safe controls", async ({
   await addPlace(page, "Graz");
   await expect(page.locator(".stop-card").first()).not.toHaveAttribute(
     "draggable",
-    "true",
   );
-  await page.getByRole("button", { name: "Move Graz up" }).click();
+  await page.getByLabel("Position for Graz").selectOption("0");
   await expect(page.getByLabel("Name for item 1")).toHaveValue("Graz");
   await expect(page.getByLabel("Name for item 2")).toHaveValue("Vienna");
+});
+
+test("stores multiple photographs outside local storage", async ({ page }) => {
+  const image = {
+    name: "place.png",
+    mimeType: "image/png",
+    buffer: Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zl1sAAAAASUVORK5CYII=",
+      "base64",
+    ),
+  };
+  await page.getByLabel("Search for a place").fill("Vienna");
+  await page.getByRole("option", { name: /Vienna/ }).click();
+  await page.locator('.upload-zone input[type="file"]').setInputFiles(image);
+  await page.getByRole("button", { name: "Close Place details" }).click();
+  await page.getByLabel("Search for a place").fill("Graz");
+  await page.getByRole("option", { name: /Graz/ }).click();
+  await page.locator('.upload-zone input[type="file"]').setInputFiles({
+    ...image,
+    name: "graz.png",
+  });
+  await page.getByRole("button", { name: "Close Place details" }).click();
+
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const stored = localStorage.getItem("wayfare.journeys.v3") ?? "";
+        return {
+          photos: (stored.match(/\"fileName\"/g) ?? []).length,
+          embeddedImages: stored.includes("data:image"),
+        };
+      }),
+    )
+    .toEqual({ photos: 2, embeddedImages: false });
+
+  await page.reload();
+  await page.getByRole("button", { name: "Edit" }).first().click();
+  await expect(page.locator(".photo-preview")).toBeVisible();
 });

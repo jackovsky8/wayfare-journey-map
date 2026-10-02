@@ -96,7 +96,9 @@ Enter the attribution required by the map provider. URLs and custom-map definiti
 
 ## Browser storage and privacy
 
-- Named journeys, descriptions, GPX coordinates, reversible diffs, appearance settings, custom maps, privacy-notice state, and resized photographs are stored in `localStorage`.
+- Named journeys, descriptions, GPX coordinates, reversible diffs, appearance settings, custom maps, and privacy-notice state are stored as compact metadata in `localStorage`.
+- Resized photographs are stored separately in IndexedDB, whose browser quota is substantially larger than `localStorage`. Existing embedded photographs are migrated automatically. Clearing site data removes both stores.
+- Chosen photographs are resized to at most 900 px on their longest side and progressively JPEG-compressed in the browser before storage. They are still embedded in exported journey codes and animated QR transfers so another device receives the complete journey.
 - The optional Mapbox token is stored in `sessionStorage` and disappears when the browser session ends.
 - Search terms are sent directly to Nominatim.
 - Coordinates used for road connections are sent directly to OSRM or the user-selected Mapbox service.
@@ -105,7 +107,7 @@ Enter the attribution required by the map provider. URLs and custom-map definiti
 - The in-app Privacy page explains local storage, required map-provider requests, sharing, Cloudflare Web Analytics, and Google AdSense.
 - Cloudflare Web Analytics and Google AdSense are inserted directly into the built HTML when their build-time IDs are configured. They are displayed as active services and cannot be disabled in Wayfare.
 
-Browser storage is limited. For journeys containing many photographs, use compressed images and periodically export the journey.
+Browser storage is still finite and controlled by the browser or operating system. For very large journeys, periodically export the journey as a backup.
 
 ## Local development
 
@@ -157,7 +159,7 @@ Vite uses relative asset paths, so the build supports both root domains and GitH
 
 ## Responsive layout
 
-On tablets and phones, a compact map appears first while the beginning of the journey list remains visible in the first screen. Toolbars contract to the available width, settings and editors become bottom sheets on narrow phones, and multi-column controls collapse to touch-friendly single columns.
+On tablets and phones, a compact map appears first while the beginning of the journey list remains visible in the first screen. Toolbars contract to the available width, settings and editors become bottom sheets on narrow phones, and multi-column controls collapse to touch-friendly single columns. Every journey card has a native position selector; choosing a number moves the item directly and avoids unreliable HTML dragging on Android.
 
 ## Sharing a complete journey
 
@@ -166,6 +168,8 @@ Choose **Share** to serialize the journey name, items, GPX coordinates, endpoint
 For phone-to-phone transfer, the same dialog divides the code into numbered QR frames. The sender repeats them in a loop. The receiver collects frames in any order, ignores repeats, waits for missed frames to appear again, and validates a checksum before importing. In-page scanning uses the browser Barcode Detector API and camera permission over HTTPS; copy/paste is the universal fallback. This is fault-tolerant against missed frames, but it is not an internet transfer and both devices must remain present until completion.
 
 **Share GIF via WhatsApp, Signal, or…** creates an animated GIF containing the repeating QR sequence and invokes the device’s native share sheet. The shared text uses `VITE_PUBLIC_SITE_URL` (configured from the GitHub `PUBLIC_SITE_URL` variable) to include one `?import=1` URL—exactly once—and explains how to open the scanner, allow camera access, and keep the GIF visible until reception reaches 100%. If file sharing is unavailable, Wayfare downloads the GIF and copies the complete instructions so both can be attached manually.
+
+Opening `?import=1` displays the Transfer dialog. Closing or completing that dialog removes the query parameter with `history.replaceState`, without reloading the map or creating an undo step.
 
 ## Search and generative-engine discoverability
 

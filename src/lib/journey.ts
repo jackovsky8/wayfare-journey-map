@@ -104,7 +104,7 @@ export const parseGpx = (xmlText: string, fileName: string): GpxTrack => {
   };
 };
 
-export const resizeImage = (file: File, maxSide = 1024): Promise<string> =>
+export const resizeImage = (file: File, maxSide = 900): Promise<string> =>
   new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onerror = () => reject(new Error("The image could not be read."));
@@ -123,7 +123,28 @@ export const resizeImage = (file: File, maxSide = 1024): Promise<string> =>
         canvas
           .getContext("2d")
           ?.drawImage(image, 0, 0, canvas.width, canvas.height);
-        resolve(canvas.toDataURL("image/jpeg", 0.8));
+        const qualities = [0.76, 0.64, 0.52];
+        const encode = (index: number) =>
+          canvas.toBlob(
+            (blob) => {
+              if (!blob) {
+                reject(new Error("The photograph could not be compressed."));
+                return;
+              }
+              if (blob.size > 280_000 && index < qualities.length - 1) {
+                encode(index + 1);
+                return;
+              }
+              const output = new FileReader();
+              output.onerror = () =>
+                reject(new Error("The photograph could not be compressed."));
+              output.onload = () => resolve(String(output.result));
+              output.readAsDataURL(blob);
+            },
+            "image/jpeg",
+            qualities[index],
+          );
+        encode(0);
       };
       image.src = String(reader.result);
     };
