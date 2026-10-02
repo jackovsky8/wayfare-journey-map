@@ -165,7 +165,7 @@ Choose **Share** to serialize the journey name, items, GPX coordinates, endpoint
 
 For phone-to-phone transfer, the same dialog divides the code into numbered QR frames. The sender repeats them in a loop. The receiver collects frames in any order, ignores repeats, waits for missed frames to appear again, and validates a checksum before importing. In-page scanning uses the browser Barcode Detector API and camera permission over HTTPS; copy/paste is the universal fallback. This is fault-tolerant against missed frames, but it is not an internet transfer and both devices must remain present until completion.
 
-**Share GIF via WhatsApp, Signal, or…** creates an animated GIF containing the repeating QR sequence and invokes the device’s native share sheet with both the GIF file and an `?import=1` link. The receiver opens that link to launch the Transfer dialog and scans the GIF while it is displayed on another screen. If the browser cannot share files, Wayfare downloads the GIF and copies the import link so both can be attached manually.
+**Share GIF via WhatsApp, Signal, or…** creates an animated GIF containing the repeating QR sequence and invokes the device’s native share sheet. The shared text uses `VITE_PUBLIC_SITE_URL` (configured from the GitHub `PUBLIC_SITE_URL` variable), includes the public Wayfare address and `?import=1` link, and explains how to open the scanner, allow camera access, and keep the GIF visible until reception reaches 100%. If file sharing is unavailable, Wayfare downloads the GIF and copies the complete instructions so both can be attached manually.
 
 ## Search and generative-engine discoverability
 

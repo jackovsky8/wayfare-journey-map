@@ -50,6 +50,7 @@ import {
 } from "./lib/share";
 import { applyDiff, createItemsDiff, type JourneyDiff } from "./lib/history";
 import { createAnimatedQrGif } from "./lib/share-gif";
+import { buildQrShareMessage } from "./lib/share-message";
 import { BUILT_IN_MAPS, findMap } from "./lib/maps";
 import {
   routeWithMapbox,
@@ -920,10 +921,10 @@ export function App() {
       const blob = await createAnimatedQrGif(qrFrames);
       const fileName = `${journey.name.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "") || "journey"}-wayfare-qr.gif`;
       const file = new File([blob], fileName, { type: "image/gif" });
-      const importUrl = new URL(location.href);
-      importUrl.search = "?import=1";
-      importUrl.hash = "";
-      const text = `Open Wayfare, choose “Scan frames with this device”, then scan the attached animated QR journey. ${importUrl}`;
+      const shareMessage = buildQrShareMessage(
+        import.meta.env.VITE_PUBLIC_SITE_URL,
+        location.href,
+      );
       if (
         navigator.share &&
         (!navigator.canShare || navigator.canShare({ files: [file] }))
@@ -931,8 +932,8 @@ export function App() {
         try {
           await navigator.share({
             title: `Wayfare journey: ${journey.name}`,
-            text,
-            url: importUrl.toString(),
+            text: shareMessage.text,
+            url: shareMessage.importUrl,
             files: [file],
           });
           return;
@@ -950,9 +951,9 @@ export function App() {
       anchor.click();
       anchor.remove();
       setTimeout(() => URL.revokeObjectURL(url), 30_000);
-      await navigator.clipboard.writeText(importUrl.toString());
+      await navigator.clipboard.writeText(shareMessage.text);
       setNotice(
-        "The animated QR GIF was downloaded and the import-page link was copied. Attach both in WhatsApp, Signal, or another messenger.",
+        "The animated QR GIF was downloaded and the complete sharing instructions were copied. Attach the GIF and paste the text in WhatsApp, Signal, or another messenger.",
       );
     } catch (error) {
       if ((error as DOMException).name !== "AbortError")
@@ -2127,11 +2128,13 @@ export function App() {
                 </div>
               )}
               <p className="field-help">
-                Native sharing sends the import-page link and animated GIF to
-                WhatsApp, Signal, or another installed app. Display the GIF on
-                one screen and scan it from the import page on the other. Camera
-                scanning requires HTTPS and the Barcode Detector API; copy/paste
-                works everywhere.
+                Native sharing sends the public Wayfare link, step-by-step
+                scanning instructions, and the animated GIF to WhatsApp, Signal,
+                or another installed app. On the receiving phone, open the link,
+                tap “Scan frames with this device”, allow camera access, and
+                point it at the GIF displayed on another screen. Keep scanning
+                until 100%. Camera scanning requires HTTPS and the Barcode
+                Detector API; copy/paste works everywhere.
               </p>
             </section>
           </div>
@@ -2248,7 +2251,10 @@ export function App() {
               other device scans. Frames repeat, can arrive in any order, and
               are checked before the journey is loaded. The GIF share button
               sends the animation and an import-page link through the phone’s
-              native WhatsApp, Signal, or system share sheet.
+              native WhatsApp, Signal, or system share sheet. The message
+              includes the public Wayfare address and tells the receiver to open
+              the import page, start the scanner, allow camera access, and keep
+              the animated GIF in view until 100% is received.
             </HelpStep>
             <HelpStep number="8" title="Keep several journeys">
               Give each journey a name and switch in My journeys. Every edit is
