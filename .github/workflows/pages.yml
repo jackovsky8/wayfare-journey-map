@@ -31,9 +31,14 @@ jobs:
       - run: npm run test:browser -- --project=chromium
       - run: npm run build
         env:
-          VITE_ADSENSE_CLIENT: ${{ secrets.ADSENSE_CLIENT }}
-          VITE_CLOUDFLARE_ANALYTICS_TOKEN: ${{ secrets.CLOUDFLARE_ANALYTICS_TOKEN }}
+          VITE_ADSENSE_CLIENT: ${{ secrets.VITE_ADSENSE_CLIENT || secrets.ADSENSE_CLIENT || vars.VITE_ADSENSE_CLIENT || vars.ADSENSE_CLIENT }}
+          VITE_CLOUDFLARE_ANALYTICS_TOKEN: ${{ secrets.VITE_CLOUDFLARE_ANALYTICS_TOKEN || secrets.CLOUDFLARE_ANALYTICS_TOKEN || vars.VITE_CLOUDFLARE_ANALYTICS_TOKEN || vars.CLOUDFLARE_ANALYTICS_TOKEN }}
           VITE_PUBLIC_SITE_URL: ${{ vars.PUBLIC_SITE_URL }}
+      - name: Verify advertising and analytics snippets
+        if: github.event_name != 'pull_request'
+        run: |
+          grep -F 'pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=' dist/index.html
+          grep -F 'static.cloudflareinsights.com/beacon.min.js' dist/index.html
       - uses: actions/upload-pages-artifact@v3
         if: github.event_name != 'pull_request'
         with:

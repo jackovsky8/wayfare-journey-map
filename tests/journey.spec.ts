@@ -201,10 +201,37 @@ test("copies, loads, and animates a self-contained journey code", async ({
   await expect(
     page.getByRole("button", { name: "Pause frames" }),
   ).toBeVisible();
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, "canShare", {
+      configurable: true,
+      value: () => true,
+    });
+    Object.defineProperty(navigator, "share", {
+      configurable: true,
+      value: async (data: ShareData) => {
+        (window as unknown as { sharedGifType?: string }).sharedGifType =
+          data.files?.[0]?.type;
+      },
+    });
+  });
+  await page
+    .getByRole("button", { name: "Share GIF via WhatsApp, Signal, or…" })
+    .click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => (window as unknown as { sharedGifType?: string }).sharedGifType,
+      ),
+    )
+    .toBe("image/gif");
   const code = await page.getByLabel("Journey code").inputValue();
   await page.getByLabel("Load a copied code").fill(code);
   await page.getByRole("button", { name: "Load as new journey" }).click();
   await expect(page.getByText(/Imported “My journey”/)).toBeVisible();
+  await page.goto("/?import=1");
+  await expect(
+    page.getByRole("heading", { name: "Transfer journey" }),
+  ).toBeVisible();
 });
 
 test("keeps named journeys and undoes with browser back", async ({ page }) => {
@@ -239,6 +266,10 @@ test("reorders journey items with touch-safe controls", async ({
   test.skip(testInfo.project.name !== "mobile", "Mobile interaction only");
   await addPlace(page, "Vienna");
   await addPlace(page, "Graz");
+  await expect(page.locator(".stop-card").first()).not.toHaveAttribute(
+    "draggable",
+    "true",
+  );
   await page.getByRole("button", { name: "Move Graz up" }).click();
   await expect(page.getByLabel("Name for item 1")).toHaveValue("Graz");
   await expect(page.getByLabel("Name for item 2")).toHaveValue("Vienna");

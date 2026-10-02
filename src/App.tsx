@@ -49,6 +49,7 @@ import {
   encodeJourney,
 } from "./lib/share";
 import { applyDiff, createItemsDiff, type JourneyDiff } from "./lib/history";
+import { createAnimatedQrGif } from "./lib/share-gif";
 import { BUILT_IN_MAPS, findMap } from "./lib/maps";
 import {
   routeWithMapbox,
@@ -376,7 +377,13 @@ export function App() {
   const [editingTrack, setEditingTrack] = useState<string | null>(null);
   const [trackQuery, setTrackQuery] = useState("");
   const [trackResults, setTrackResults] = useState<SearchResult[]>([]);
-  const [shareOpen, setShareOpen] = useState(false);
+  const [shareOpen, setShareOpen] = useState(() =>
+    new URLSearchParams(location.search).has("import"),
+  );
+  const [sharingGif, setSharingGif] = useState(false);
+  const [coarsePointer, setCoarsePointer] = useState(
+    () => matchMedia("(pointer: coarse)").matches,
+  );
   const [routeStatus, setRouteStatus] = useState<
     "idle" | "routing" | "fallback"
   >("idle");
@@ -480,6 +487,13 @@ export function App() {
     journeyRef.current = next;
     setJourney(next);
   };
+
+  useEffect(() => {
+    const media = matchMedia("(pointer: coarse)");
+    const update = () => setCoarsePointer(media.matches);
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
 
   useEffect(() => {
     try {
@@ -900,6 +914,58 @@ export function App() {
     }
   };
 
+  const shareAnimatedQr = async () => {
+    setSharingGif(true);
+    try {
+      const blob = await createAnimatedQrGif(qrFrames);
+      const fileName = `${journey.name.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "") || "journey"}-wayfare-qr.gif`;
+      const file = new File([blob], fileName, { type: "image/gif" });
+      const importUrl = new URL(location.href);
+      importUrl.search = "?import=1";
+      importUrl.hash = "";
+      const text = `Open Wayfare, choose “Scan frames with this device”, then scan the attached animated QR journey. ${importUrl}`;
+      if (
+        navigator.share &&
+        (!navigator.canShare || navigator.canShare({ files: [file] }))
+      ) {
+        try {
+          await navigator.share({
+            title: `Wayfare journey: ${journey.name}`,
+            text,
+            url: importUrl.toString(),
+            files: [file],
+          });
+          return;
+        } catch (error) {
+          if ((error as DOMException).name === "AbortError") return;
+          // Some browsers report file sharing support but reject mixed
+          // file-and-link payloads. Continue with download + copied link.
+        }
+      }
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = fileName;
+      document.body.append(anchor);
+      anchor.click();
+      anchor.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 30_000);
+      await navigator.clipboard.writeText(importUrl.toString());
+      setNotice(
+        "The animated QR GIF was downloaded and the import-page link was copied. Attach both in WhatsApp, Signal, or another messenger.",
+      );
+    } catch (error) {
+      if ((error as DOMException).name !== "AbortError")
+        setNotice(
+          error instanceof Error
+            ? error.message
+            : "The QR GIF could not be shared.",
+        );
+    } finally {
+      setSharingGif(false);
+    }
+  };
+
   return (
     <main className="app-shell">
       <header className="topbar">
@@ -1078,7 +1144,7 @@ export function App() {
                 <div key={item.id}>
                   <article
                     className={`stop-card ${item.type === "track" ? "track-card" : ""} ${dragged === index ? "dragging" : ""}`}
-                    draggable
+                    draggable={!coarsePointer}
                     onDragStart={() => setDragged(index)}
                     onDragOver={(event) => event.preventDefault()}
                     onDrop={() => {
@@ -2040,6 +2106,16 @@ export function App() {
                 <QrCode size={16} />
                 {qrPlaying ? "Pause frames" : "Start repeating frames"}
               </button>
+              <button
+                className="button primary"
+                onClick={() => void shareAnimatedQr()}
+                disabled={sharingGif}
+              >
+                <Share2 size={16} />
+                {sharingGif
+                  ? `Creating ${qrFrames.length} GIF frames…`
+                  : "Share GIF via WhatsApp, Signal, or…"}
+              </button>
               <button className="button ghost" onClick={startQrScanner}>
                 Scan frames with this device
               </button>
@@ -2051,9 +2127,11 @@ export function App() {
                 </div>
               )}
               <p className="field-help">
-                Keep both screens awake. Camera scanning requires HTTPS and a
-                browser with the Barcode Detector API; copy/paste works
-                everywhere.
+                Native sharing sends the import-page link and animated GIF to
+                WhatsApp, Signal, or another installed app. Display the GIF on
+                one screen and scan it from the import page on the other. Camera
+                scanning requires HTTPS and the Barcode Detector API; copy/paste
+                works everywhere.
               </p>
             </section>
           </div>
@@ -2168,7 +2246,9 @@ export function App() {
               Transfer keeps large data out of the URL. Copy and paste the
               Base64 journey code, or play its numbered QR frames while the
               other device scans. Frames repeat, can arrive in any order, and
-              are checked before the journey is loaded.
+              are checked before the journey is loaded. The GIF share button
+              sends the animation and an import-page link through the phone’s
+              native WhatsApp, Signal, or system share sheet.
             </HelpStep>
             <HelpStep number="8" title="Keep several journeys">
               Give each journey a name and switch in My journeys. Every edit is

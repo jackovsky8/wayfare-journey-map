@@ -8,6 +8,7 @@ Wayfare is a frontend-only travel-map editor for turning places, stories, photog
 
 - Search for cities, landmarks, and addresses through OpenStreetMap Nominatim.
 - Add, rename, reorder, insert, and remove places.
+- Reorder with drag-and-drop on pointer devices or dedicated touch-safe up/down controls on phones and tablets.
 - Import GPX tracks containing `trkpt` or `rtept` points.
 - Add optional numbered start and end places to a GPX track, including names, descriptions, cropped photographs, and map callouts.
 - Edit and split a GPX track by searching for a place; Wayfare cuts at the nearest recorded GPX point and inserts the selected place between both track segments.
@@ -163,6 +164,8 @@ On tablets and phones, a compact map appears first while the beginning of the jo
 Choose **Share** to serialize the journey name, items, GPX coordinates, endpoint places, appearance settings, descriptions, and photographs into URL-safe Base64. The code is displayed for copying and pasting; it is deliberately not placed in the page URL. Loading a code creates a new local journey so it does not overwrite existing work. The Mapbox session token is deliberately excluded.
 
 For phone-to-phone transfer, the same dialog divides the code into numbered QR frames. The sender repeats them in a loop. The receiver collects frames in any order, ignores repeats, waits for missed frames to appear again, and validates a checksum before importing. In-page scanning uses the browser Barcode Detector API and camera permission over HTTPS; copy/paste is the universal fallback. This is fault-tolerant against missed frames, but it is not an internet transfer and both devices must remain present until completion.
+
+**Share GIF via WhatsApp, Signal, or…** creates an animated GIF containing the repeating QR sequence and invokes the device’s native share sheet with both the GIF file and an `?import=1` link. The receiver opens that link to launch the Transfer dialog and scans the GIF while it is displayed on another screen. If the browser cannot share files, Wayfare downloads the GIF and copies the import link so both can be attached manually.
 
 ## Search and generative-engine discoverability
 
