@@ -67,6 +67,7 @@ describe("callout collision layout", () => {
   });
 
   it("optimizes a dense group as one layout", () => {
+    const progress: number[] = [];
     const placements = layoutCallouts(
       [
         { id: "a", anchor: { x: 145, y: 145 }, width: 92, height: 60 },
@@ -79,6 +80,8 @@ describe("callout collision layout", () => {
         { x: 300, y: 152 },
       ],
       { width: 320, height: 320 },
+      {},
+      (value) => progress.push(value),
     );
     const metrics = measureLayout(
       placements,
@@ -91,6 +94,8 @@ describe("callout collision layout", () => {
     expect(metrics.overlaps).toBe(0);
     expect(metrics.connectorCrossings).toBe(0);
     expect(metrics.connectorBoxIntersections).toBe(0);
+    expect(progress.at(-1)).toBe(1);
+    expect(progress.length).toBe(4);
   });
 
   it("keeps a free callout immediately beside its place and joins its edge", () => {

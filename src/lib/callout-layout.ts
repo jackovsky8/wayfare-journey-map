@@ -375,6 +375,7 @@ export function layoutCallouts(
   route: Point[],
   viewport: { width: number; height: number },
   options: LayoutOptions = {},
+  onProgress?: (progress: number) => void,
 ): CalloutPlacement[] {
   if (!items.length) return [];
   const candidates = items.map((item) =>
@@ -400,7 +401,8 @@ export function layoutCallouts(
   ];
 
   let best: { placements: Candidate[]; score: number } | undefined;
-  orders.slice(0, options.startingLayouts ?? 4).forEach((order) => {
+  const selectedOrders = orders.slice(0, options.startingLayouts ?? 4);
+  selectedOrders.forEach((order, orderIndex) => {
     const initial = new Array<Candidate>(items.length);
     order.forEach((index) => {
       let chosen = candidates[index][0];
@@ -417,6 +419,7 @@ export function layoutCallouts(
     });
     const optimized = optimize(initial, candidates, route, viewport, options);
     if (!best || optimized.score < best.score) best = optimized;
+    onProgress?.((orderIndex + 1) / selectedOrders.length);
   });
 
   return (best?.placements ?? candidates.map((list) => list[0])).map(

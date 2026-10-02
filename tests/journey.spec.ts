@@ -184,6 +184,49 @@ test("explains the workflow and offers every export format", async ({
   ).toBeVisible();
 });
 
+test("calculates an image before a user-triggered download", async ({
+  page,
+}) => {
+  await page.getByRole("button", { name: "Export" }).click();
+  await page.getByRole("button", { name: "Calculate image" }).click();
+  await expect(page.getByText("Composing your journey map")).toBeVisible();
+  await expect(page.getByRole("progressbar")).toBeVisible();
+  await expect(page.getByText("Image ready")).toBeVisible({ timeout: 20_000 });
+
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, "canShare", {
+      configurable: true,
+      value: () => true,
+    });
+    Object.defineProperty(navigator, "share", {
+      configurable: true,
+      value: async (data: ShareData) => {
+        (window as unknown as { exportedType?: string }).exportedType =
+          data.files?.[0]?.type;
+      },
+    });
+  });
+  await page.getByRole("button", { name: "Download / Share image" }).click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => (window as unknown as { exportedType?: string }).exportedType,
+      ),
+    )
+    .toBe("image/png");
+});
+
+test("cancels image calculation and returns to the map", async ({ page }) => {
+  await addPlace(page, "Vienna");
+  await page.getByRole("button", { name: "Export" }).click();
+  await page.getByRole("button", { name: "Calculate image" }).click();
+  await page.getByRole("button", { name: "Cancel and return" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Export journey" }),
+  ).not.toBeVisible();
+  await expect(page.getByTestId("map")).toBeVisible();
+});
+
 test("persists the full journey in browser storage", async ({ page }) => {
   await addPlace(page, "Vienna");
   await page.reload();

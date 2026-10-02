@@ -91,6 +91,7 @@ Enter the attribution required by the map provider. URLs and custom-map definiti
 - Choose the current view, A3/A4/A5, US Letter, common photo prints, square/landscape photo books, Full HD, 4:3, square, or phone-story formats.
 - Fixed-size exports temporarily recompose and fit the map in the selected aspect ratio instead of stretching a phone-shaped screenshot.
 - Image and GPX downloads use Blob URLs; supported iPhone/iPad browsers can use the native share sheet for generated images.
+- Image creation and delivery are separate: a blocking progress dialog reports map preparation, full callout optimization, drawing, and encoding. The user can cancel safely, and only a fresh final **Download / Share image** tap invokes the browser download or native mobile share sheet. This avoids mobile browsers blocking a delayed automatic download after asynchronous rendering.
 - Export a GPX file containing place waypoints and the complete connected journey track.
 - Use the built-in Help section for an in-app workflow guide.
 

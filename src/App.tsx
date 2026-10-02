@@ -391,6 +391,12 @@ export function App() {
     "png",
   );
   const [exportPreset, setExportPreset] = useState("screen");
+  const [exportJob, setExportJob] = useState<{
+    status: "idle" | "calculating" | "ready" | "error";
+    progress: number;
+    label: string;
+    file?: File;
+  }>({ status: "idle", progress: 0, label: "" });
   const [editingPlace, setEditingPlace] = useState<string | null>(null);
   const [editingTrack, setEditingTrack] = useState<string | null>(null);
   const [trackQuery, setTrackQuery] = useState("");
@@ -416,6 +422,7 @@ export function App() {
   const qrFramesRef = useRef(new globalThis.Map<number, string>());
   const qrTransferRef = useRef<string | undefined>(undefined);
   const persistenceRevisionRef = useRef(0);
+  const exportAbortRef = useRef<AbortController | null>(null);
 
   const closeShareDialog = () => {
     setShareOpen(false);
@@ -429,6 +436,84 @@ export function App() {
       const nextUrl = `${url.pathname}${url.search}${url.hash}`;
       window.history.replaceState(window.history.state, "", nextUrl);
     }
+  };
+
+  const closeExport = () => {
+    exportAbortRef.current?.abort();
+    exportAbortRef.current = null;
+    setExportJob({ status: "idle", progress: 0, label: "" });
+    setExportOpen(false);
+  };
+
+  const calculateExport = async () => {
+    const preset =
+      EXPORT_PRESETS.find((entry) => entry.id === exportPreset) ??
+      EXPORT_PRESETS[0];
+    const controller = new AbortController();
+    exportAbortRef.current = controller;
+    setExportJob({
+      status: "calculating",
+      progress: 0,
+      label: "Preparing export…",
+    });
+    try {
+      const file = await mapRef.current?.exportImage(
+        exportFormat,
+        preset.width
+          ? { width: preset.width, height: preset.height }
+          : undefined,
+        {
+          signal: controller.signal,
+          onProgress: (progress, label) =>
+            setExportJob((current) =>
+              current.status === "calculating"
+                ? { ...current, progress, label }
+                : current,
+            ),
+        },
+      );
+      if (controller.signal.aborted) return;
+      if (!file) throw new Error("The map is not ready for export.");
+      setExportJob({
+        status: "ready",
+        progress: 1,
+        label: "Your image is ready.",
+        file,
+      });
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      setExportJob({
+        status: "error",
+        progress: 0,
+        label: error instanceof Error ? error.message : "Image export failed.",
+      });
+    } finally {
+      if (exportAbortRef.current === controller) exportAbortRef.current = null;
+    }
+  };
+
+  const deliverExport = async (file: File) => {
+    if (
+      navigator.share &&
+      (!navigator.canShare || navigator.canShare({ files: [file] }))
+    ) {
+      try {
+        await navigator.share({ files: [file], title: "Journey map" });
+        return;
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError")
+          return;
+      }
+    }
+    const url = URL.createObjectURL(file);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = file.name;
+    anchor.target = "_blank";
+    document.body.append(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
   };
 
   const places = useMemo(
@@ -2285,8 +2370,11 @@ export function App() {
             </HelpStep>
             <HelpStep number="6" title="Export">
               Choose PNG, JPG, or WebP and a print, photo-book, screen, or
-              social format. Exports temporarily compose the map in the chosen
-              aspect ratio. You can also export the connected route as GPX.
+              social format. A blocking progress dialog composes and optimizes
+              the selected page; cancel returns to the unchanged map. When the
+              file is ready, use the final Download / Share button so web,
+              Android, and iOS treat it as a direct user action. You can also
+              export the connected route as GPX.
             </HelpStep>
             <HelpStep number="7" title="Share and continue">
               Transfer keeps large data out of the URL. Copy and paste the
@@ -2328,77 +2416,125 @@ export function App() {
         <Modal
           title="Export journey"
           eyebrow="Take it with you"
-          onClose={() => setExportOpen(false)}
+          onClose={closeExport}
         >
-          <div className="export-options">
-            <label>
-              Page or photo-book format
-              <select
-                value={exportPreset}
-                onChange={(event) => setExportPreset(event.target.value)}
+          {exportJob.status === "idle" && (
+            <div className="export-options">
+              <label>
+                Page or photo-book format
+                <select
+                  value={exportPreset}
+                  onChange={(event) => setExportPreset(event.target.value)}
+                >
+                  {EXPORT_PRESETS.map((preset) => (
+                    <option key={preset.id} value={preset.id}>
+                      {preset.label} — {preset.detail}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Image file format
+                <select
+                  value={exportFormat}
+                  onChange={(event) =>
+                    setExportFormat(event.target.value as typeof exportFormat)
+                  }
+                >
+                  <option value="png">PNG — best quality</option>
+                  <option value="jpeg">JPG — universal</option>
+                  <option value="webp">WebP — smallest file</option>
+                </select>
+              </label>
+              <button
+                className="button primary export-download"
+                onClick={() => void calculateExport()}
               >
-                {EXPORT_PRESETS.map((preset) => (
-                  <option key={preset.id} value={preset.id}>
-                    {preset.label} — {preset.detail}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Image file format
-              <select
-                value={exportFormat}
-                onChange={(event) =>
-                  setExportFormat(event.target.value as typeof exportFormat)
+                <ImageDown size={18} />
+                Calculate image
+              </button>
+            </div>
+          )}
+          {exportJob.status === "calculating" && (
+            <div className="export-progress" aria-live="polite">
+              <div className="export-progress-art" aria-hidden="true">
+                <Map size={28} />
+              </div>
+              <strong>Composing your journey map</strong>
+              <p>{exportJob.label}</p>
+              <progress value={exportJob.progress} max={1} />
+              <span>{Math.round(exportJob.progress * 100)}%</span>
+              <button className="button ghost" onClick={closeExport}>
+                Cancel and return
+              </button>
+            </div>
+          )}
+          {exportJob.status === "ready" && exportJob.file && (
+            <div className="export-progress export-ready" aria-live="polite">
+              <div className="export-progress-art" aria-hidden="true">
+                <ImageDown size={28} />
+              </div>
+              <strong>Image ready</strong>
+              <p>
+                {exportJob.file.name} ·{" "}
+                {Math.max(1, Math.round(exportJob.file.size / 1024))} KB
+              </p>
+              <button
+                className="button primary"
+                onClick={() => void deliverExport(exportJob.file!)}
+              >
+                <Download size={18} />
+                Download / Share image
+              </button>
+              <button className="button ghost" onClick={closeExport}>
+                Back to map
+              </button>
+            </div>
+          )}
+          {exportJob.status === "error" && (
+            <div className="export-progress" role="alert">
+              <strong>Export could not be completed</strong>
+              <p>{exportJob.label}</p>
+              <button
+                className="button primary"
+                onClick={() =>
+                  setExportJob({ status: "idle", progress: 0, label: "" })
                 }
               >
-                <option value="png">PNG — best quality</option>
-                <option value="jpeg">JPG — universal</option>
-                <option value="webp">WebP — smallest file</option>
-              </select>
-            </label>
-            <button
-              className="button primary export-download"
-              onClick={() => {
-                const preset =
-                  EXPORT_PRESETS.find((entry) => entry.id === exportPreset) ??
-                  EXPORT_PRESETS[0];
-                mapRef.current?.exportImage(
-                  exportFormat,
-                  preset.width
-                    ? { width: preset.width, height: preset.height }
-                    : undefined,
-                );
-                setExportOpen(false);
-              }}
-            >
-              <ImageDown size={18} />
-              Download image
-            </button>
-          </div>
-          <div className="export-grid compact">
-            <button
-              onClick={() => {
-                downloadText(
-                  "journey.gpx",
-                  buildGpx(items, route),
-                  "application/gpx+xml",
-                );
-                setExportOpen(false);
-              }}
-            >
-              <Route size={20} />
-              <span>
-                <strong>GPX</strong>
-                <small>Complete connected route</small>
-              </span>
-            </button>
-          </div>
-          <p className="export-note">
-            Image exports include the current map, route, labels, photographs,
-            and frames. Fixed-size formats preserve the whole map and add
-            neutral margins when its proportions differ from the chosen page.
-          </p>
+                Try again
+              </button>
+              <button className="button ghost" onClick={closeExport}>
+                Back to map
+              </button>
+            </div>
+          )}
+          {exportJob.status === "idle" && (
+            <div className="export-grid compact">
+              <button
+                onClick={() => {
+                  downloadText(
+                    "journey.gpx",
+                    buildGpx(items, route),
+                    "application/gpx+xml",
+                  );
+                  setExportOpen(false);
+                }}
+              >
+                <Route size={20} />
+                <span>
+                  <strong>GPX</strong>
+                  <small>Complete connected route</small>
+                </span>
+              </button>
+            </div>
+          )}
+          {exportJob.status === "idle" && (
+            <p className="export-note">
+              Image exports include the current map, route, labels, photographs,
+              and frames. Fixed-size formats preserve the whole map and add
+              neutral margins when its proportions differ from the chosen page.
+            </p>
+          )}
         </Modal>
       )}
       <footer className="site-footer">

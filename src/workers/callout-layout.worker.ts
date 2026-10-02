@@ -25,7 +25,9 @@ self.onmessage = (event: MessageEvent<LayoutRequest>) => {
     self.postMessage({
       id,
       phase: "final",
-      placements: layoutCallouts(items, route, viewport, options),
+      placements: layoutCallouts(items, route, viewport, options, (progress) =>
+        self.postMessage({ id, phase: "progress", progress }),
+      ),
     });
     return;
   }

@@ -686,6 +686,49 @@ h2 {
   font-size: 11px;
   line-height: 1.5;
 }
+.export-progress {
+  min-height: 310px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 12px;
+  text-align: center;
+}
+.export-progress-art {
+  width: 64px;
+  height: 64px;
+  display: grid;
+  place-items: center;
+  border-radius: 20px 20px 20px 6px;
+  color: #fff;
+  background: #df5f3f;
+  box-shadow: 0 10px 28px #c74f3438;
+}
+.export-progress p {
+  max-width: 340px;
+  margin: 0;
+  color: #747970;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.export-progress progress {
+  width: min(320px, 100%);
+  height: 12px;
+  accent-color: #df5f3f;
+}
+.export-progress > span {
+  color: #a24d37;
+  font:
+    500 12px "DM Mono",
+    monospace;
+}
+.export-progress .button {
+  min-width: 180px;
+}
+.export-ready .export-progress-art {
+  background: #34705a;
+  box-shadow: 0 10px 28px #34705a38;
+}
 .maplibregl-ctrl-group {
   border-radius: 10px !important;
   overflow: hidden;

@@ -24,7 +24,11 @@ export interface JourneyMapHandle {
   exportImage: (
     format: "png" | "jpeg" | "webp",
     output?: { width: number; height: number },
-  ) => void;
+    options?: {
+      signal?: AbortSignal;
+      onProgress?: (progress: number, label: string) => void;
+    },
+  ) => Promise<File>;
   fit: () => void;
 }
 
@@ -76,7 +80,29 @@ const loadImage = (source: string) =>
     image.src = source;
   });
 
-const saveCanvas = async (
+const waitForMapEvent = (
+  map: MapLibreMap,
+  eventName: "moveend" | "idle",
+  signal?: AbortSignal,
+) =>
+  new Promise<void>((resolve, reject) => {
+    const complete = () => {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    };
+    const abort = () => {
+      map.off(eventName, complete);
+      reject(new DOMException("Export cancelled.", "AbortError"));
+    };
+    if (signal?.aborted) {
+      abort();
+      return;
+    }
+    signal?.addEventListener("abort", abort, { once: true });
+    map.once(eventName, complete);
+  });
+
+const canvasFile = async (
   canvas: HTMLCanvasElement,
   format: "png" | "jpeg" | "webp",
 ) => {
@@ -86,24 +112,7 @@ const saveCanvas = async (
     canvas.toBlob(resolve, mime, 0.94),
   );
   if (!blob) throw new Error("The browser could not create the image file.");
-  const file = new File([blob], `journey-map.${extension}`, { type: mime });
-  if (navigator.share && navigator.canShare?.({ files: [file] })) {
-    try {
-      await navigator.share({ files: [file], title: "Journey map" });
-      return;
-    } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") return;
-    }
-  }
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = file.name;
-  anchor.target = "_blank";
-  document.body.append(anchor);
-  anchor.click();
-  anchor.remove();
-  window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
+  return new File([blob], `journey-map.${extension}`, { type: mime });
 };
 
 const svgNamespace = "http://www.w3.org/2000/svg";
@@ -112,17 +121,37 @@ const computeLayoutInBackground = (
   route: Point[],
   viewport: { width: number; height: number },
   options?: LayoutOptions,
+  signal?: AbortSignal,
+  onProgress?: (progress: number) => void,
 ) =>
   new Promise<CalloutPlacement[]>((resolve, reject) => {
     const worker = new Worker(
       new URL("../workers/callout-layout.worker.ts", import.meta.url),
       { type: "module" },
     );
-    worker.onmessage = (
-      event: MessageEvent<{ placements: CalloutPlacement[] }>,
-    ) => {
+    const abort = () => {
       worker.terminate();
-      resolve(event.data.placements);
+      reject(new DOMException("Export cancelled.", "AbortError"));
+    };
+    if (signal?.aborted) {
+      abort();
+      return;
+    }
+    signal?.addEventListener("abort", abort, { once: true });
+    worker.onmessage = (
+      event: MessageEvent<{
+        phase: "progress" | "final";
+        progress?: number;
+        placements?: CalloutPlacement[];
+      }>,
+    ) => {
+      if (event.data.phase === "progress") {
+        onProgress?.(event.data.progress ?? 0);
+        return;
+      }
+      signal?.removeEventListener("abort", abort);
+      worker.terminate();
+      resolve(event.data.placements ?? []);
     };
     worker.onerror = (event) => {
       worker.terminate();
@@ -666,247 +695,282 @@ export const JourneyMap = forwardRef<JourneyMapHandle, Props>(
 
     useImperativeHandle(ref, () => ({
       fit,
-      exportImage: async (format, output) => {
+      exportImage: async (format, output, exportOptions) => {
         const map = mapRef.current;
-        if (!map) return;
+        if (!map) throw new Error("The map is not ready for export.");
+        const { signal, onProgress } = exportOptions ?? {};
+        const checkCancelled = () => {
+          if (signal?.aborted)
+            throw new DOMException("Export cancelled.", "AbortError");
+        };
+        onProgress?.(0.04, "Preparing export canvas…");
+        checkCancelled();
         const stage = map.getContainer().parentElement;
         const originalHeight = stage?.style.height ?? "";
         const originalWidth = stage?.style.width ?? "";
-        if (output && stage) {
-          const previewWidth = Math.min(
-            2000,
-            Math.max(640, output.width / Math.max(1, devicePixelRatio)),
-          );
-          stage.style.width = `${previewWidth}px`;
-          stage.style.height = `${previewWidth * (output.height / output.width)}px`;
-          map.resize();
-          const moved = new Promise<void>((resolve) =>
-            map.once("moveend", () => resolve()),
-          );
-          fit();
-          await moved;
-        }
-        await new Promise<void>((resolve) =>
-          map.loaded() ? resolve() : map.once("idle", () => resolve()),
-        );
-        const base = map.getCanvas();
-        const canvas = document.createElement("canvas");
-        canvas.width = base.width;
-        canvas.height = base.height;
-        const context = canvas.getContext("2d");
-        if (!context) return;
-        context.drawImage(base, 0, 0);
-        const scale = base.width / base.clientWidth;
-
-        const exportItems = latestRef.current.places.flatMap((place, index) => {
-          if (!place.name && !place.photo) return [];
-          const point = map.project([place.lng, place.lat]);
-          const description =
-            latestRef.current.labels.showDescriptions && place.description
-              ? place.description.slice(0, 70)
-              : "";
-          context.font = `600 ${latestRef.current.labels.fontSize * scale}px Manrope, sans-serif`;
-          const labelWidth = Math.min(
-            260 * scale,
-            Math.max(
-              80 * scale,
-              context.measureText(place.name).width + 18 * scale,
-              description
-                ? context.measureText(description).width + 18 * scale
-                : 0,
-            ),
-          );
-          const labelHeight = (description ? 42 : 27) * scale;
-          const photoSize =
-            (place.photo ? latestRef.current.photos.size : 0) * scale;
-          return [
-            {
-              id: String(index),
-              anchor: { x: point.x * scale, y: point.y * scale },
-              width: Math.max(labelWidth, photoSize),
-              height: labelHeight + (place.photo ? photoSize + 6 * scale : 0),
-            },
-          ];
-        });
-        const routePoints = latestRef.current.route.coordinates.map(
-          (coordinate) => {
-            const point = map.project(coordinate);
-            return { x: point.x * scale, y: point.y * scale };
-          },
-        );
-        const exportPlacements = await computeLayoutInBackground(
-          exportItems,
-          routePoints,
-          { width: canvas.width, height: canvas.height },
-          {
-            padding: 10 * scale,
-            routeClearance: 8 * scale,
-            viewportMargin: 8 * scale,
-            minDistance: 18 * scale,
-            maxDistance: 242 * scale,
-            distanceStep: 32 * scale,
-            optimizationPasses: 10,
-            startingLayouts: 4,
-          },
-        );
-        exportPlacements.forEach((placement) =>
-          drawCanvasConnector(
-            context,
-            placement,
-            latestRef.current.callouts,
-            scale,
-          ),
-        );
-        const placementById = new Map(
-          exportPlacements.map((placement) => [placement.id, placement]),
-        );
-
-        for (const [placeIndex, place] of latestRef.current.places.entries()) {
-          const point = map.project([place.lng, place.lat]);
-          const x = point.x * scale;
-          const y = point.y * scale;
-
-          if (place.marker === "pin") {
-            context.save();
-            context.fillStyle = "#ffffff";
-            context.font = `700 ${12 * scale}px Manrope, sans-serif`;
-            context.textAlign = "center";
-            context.textBaseline = "middle";
-            context.fillText(String(placeIndex + 1), x, y);
-            context.restore();
-          }
-
-          if (!place.name && !place.photo) continue;
-
-          const description =
-            latestRef.current.labels.showDescriptions && place.description
-              ? place.description.slice(0, 70)
-              : "";
-          context.font = `600 ${latestRef.current.labels.fontSize * scale}px Manrope, sans-serif`;
-          const labelWidth = Math.min(
-            260 * scale,
-            Math.max(
-              80 * scale,
-              context.measureText(place.name).width + 18 * scale,
-              description
-                ? context.measureText(description).width + 18 * scale
-                : 0,
-            ),
-          );
-          const labelHeight = (description ? 42 : 27) * scale;
-          const photoSize =
-            (place.photo ? latestRef.current.photos.size : 0) * scale;
-          const calloutWidth = Math.max(labelWidth, photoSize);
-          const calloutHeight =
-            labelHeight + (place.photo ? photoSize + 6 * scale : 0);
-
-          const placement = placementById.get(String(placeIndex));
-          if (!placement) continue;
-          const centerX = (placement.box.left + placement.box.right) / 2;
-          const calloutBottom = placement.box.bottom;
-          const labelTop = calloutBottom - labelHeight;
-
-          if (place.photo) {
-            try {
-              const image = await loadImage(place.photo.dataUrl);
-              const size = photoSize;
-              const photoX = centerX - size / 2;
-              const photoY = labelTop - 6 * scale - size;
-              context.save();
-              const radius =
-                ((latestRef.current.photos.radius / 100) * size) / 2;
-              context.beginPath();
-              context.roundRect(photoX, photoY, size, size, radius);
-              context.clip();
-              const imageRatio = image.width / image.height;
-              const zoomed = place.photo.zoom;
-              let sourceWidth = image.width / zoomed;
-              let sourceHeight = image.height / zoomed;
-              if (imageRatio > 1) sourceWidth = sourceHeight;
-              else sourceHeight = sourceWidth;
-              const sx =
-                ((image.width - sourceWidth) * place.photo.cropX) / 100;
-              const sy =
-                ((image.height - sourceHeight) * place.photo.cropY) / 100;
-              context.drawImage(
-                image,
-                sx,
-                sy,
-                sourceWidth,
-                sourceHeight,
-                photoX,
-                photoY,
-                size,
-                size,
-              );
-              context.restore();
-              context.strokeStyle = latestRef.current.photos.borderColor;
-              context.lineWidth = latestRef.current.photos.borderWidth * scale;
-              context.beginPath();
-              context.roundRect(photoX, photoY, size, size, radius);
-              context.stroke();
-            } catch {
-              /* A broken local image should not block the map export. */
-            }
-          }
-          if (place.name) {
-            context.font = `600 ${latestRef.current.labels.fontSize * scale}px Manrope, sans-serif`;
-            context.fillStyle = latestRef.current.labels.backgroundColor;
-            context.strokeStyle = latestRef.current.labels.borderColor;
-            context.lineWidth = latestRef.current.labels.borderWidth * scale;
-            context.beginPath();
-            context.roundRect(
-              centerX - labelWidth / 2,
-              labelTop,
-              labelWidth,
-              labelHeight,
-              latestRef.current.labels.radius * scale,
-            );
-            context.fill();
-            context.stroke();
-            context.textAlign = "center";
-            context.fillStyle = latestRef.current.labels.textColor;
-            context.fillText(
-              place.name,
-              centerX,
-              calloutBottom - (description ? 23 : 9) * scale,
-            );
-            if (description) {
-              context.font = `400 ${Math.max(10, latestRef.current.labels.fontSize - 2) * scale}px Manrope, sans-serif`;
-              context.fillText(
-                description,
-                centerX,
-                calloutBottom - 7 * scale,
-                labelWidth - 12 * scale,
-              );
-            }
-          }
-        }
-        let downloadCanvas = canvas;
-        if (output) {
-          downloadCanvas = document.createElement("canvas");
-          downloadCanvas.width = output.width;
-          downloadCanvas.height = output.height;
-          const outputContext = downloadCanvas.getContext("2d");
-          if (!outputContext) return;
-          outputContext.fillStyle = "#f5f2ea";
-          outputContext.fillRect(0, 0, output.width, output.height);
-          const fitScale = Math.min(
-            output.width / canvas.width,
-            output.height / canvas.height,
-          );
-          const width = canvas.width * fitScale;
-          const height = canvas.height * fitScale;
-          outputContext.drawImage(
-            canvas,
-            (output.width - width) / 2,
-            (output.height - height) / 2,
-            width,
-            height,
-          );
-        }
         try {
-          await saveCanvas(downloadCanvas, format);
+          if (output && stage) {
+            const previewWidth = Math.min(
+              2000,
+              Math.max(640, output.width / Math.max(1, devicePixelRatio)),
+            );
+            stage.style.width = `${previewWidth}px`;
+            stage.style.height = `${previewWidth * (output.height / output.width)}px`;
+            map.resize();
+            const moved = waitForMapEvent(map, "moveend", signal);
+            fit();
+            await moved;
+          }
+          onProgress?.(0.12, "Waiting for map tiles…");
+          checkCancelled();
+          if (!map.loaded()) await waitForMapEvent(map, "idle", signal);
+          checkCancelled();
+          const base = map.getCanvas();
+          const canvas = document.createElement("canvas");
+          canvas.width = base.width;
+          canvas.height = base.height;
+          const context = canvas.getContext("2d");
+          if (!context) throw new Error("The export canvas is unavailable.");
+          context.drawImage(base, 0, 0);
+          const scale = base.width / base.clientWidth;
+
+          const exportItems = latestRef.current.places.flatMap(
+            (place, index) => {
+              if (!place.name && !place.photo) return [];
+              const point = map.project([place.lng, place.lat]);
+              const description =
+                latestRef.current.labels.showDescriptions && place.description
+                  ? place.description.slice(0, 70)
+                  : "";
+              context.font = `600 ${latestRef.current.labels.fontSize * scale}px Manrope, sans-serif`;
+              const labelWidth = Math.min(
+                260 * scale,
+                Math.max(
+                  80 * scale,
+                  context.measureText(place.name).width + 18 * scale,
+                  description
+                    ? context.measureText(description).width + 18 * scale
+                    : 0,
+                ),
+              );
+              const labelHeight = (description ? 42 : 27) * scale;
+              const photoSize =
+                (place.photo ? latestRef.current.photos.size : 0) * scale;
+              return [
+                {
+                  id: String(index),
+                  anchor: { x: point.x * scale, y: point.y * scale },
+                  width: Math.max(labelWidth, photoSize),
+                  height:
+                    labelHeight + (place.photo ? photoSize + 6 * scale : 0),
+                },
+              ];
+            },
+          );
+          const routePoints = latestRef.current.route.coordinates.map(
+            (coordinate) => {
+              const point = map.project(coordinate);
+              return { x: point.x * scale, y: point.y * scale };
+            },
+          );
+          const exportPlacements = await computeLayoutInBackground(
+            exportItems,
+            routePoints,
+            { width: canvas.width, height: canvas.height },
+            {
+              padding: 10 * scale,
+              routeClearance: 8 * scale,
+              viewportMargin: 8 * scale,
+              minDistance: 18 * scale,
+              maxDistance: 242 * scale,
+              distanceStep: 32 * scale,
+              optimizationPasses: 12,
+              startingLayouts: 4,
+            },
+            signal,
+            (progress) =>
+              onProgress?.(
+                0.18 + progress * 0.47,
+                `Optimizing callouts ${Math.round(progress * 100)}%…`,
+              ),
+          );
+          checkCancelled();
+          onProgress?.(0.68, "Drawing connectors…");
+          exportPlacements.forEach((placement) =>
+            drawCanvasConnector(
+              context,
+              placement,
+              latestRef.current.callouts,
+              scale,
+            ),
+          );
+          const placementById = new Map(
+            exportPlacements.map((placement) => [placement.id, placement]),
+          );
+
+          for (const [
+            placeIndex,
+            place,
+          ] of latestRef.current.places.entries()) {
+            checkCancelled();
+            const point = map.project([place.lng, place.lat]);
+            const x = point.x * scale;
+            const y = point.y * scale;
+
+            if (place.marker === "pin") {
+              context.save();
+              context.fillStyle = "#ffffff";
+              context.font = `700 ${12 * scale}px Manrope, sans-serif`;
+              context.textAlign = "center";
+              context.textBaseline = "middle";
+              context.fillText(String(placeIndex + 1), x, y);
+              context.restore();
+            }
+
+            if (!place.name && !place.photo) continue;
+
+            const description =
+              latestRef.current.labels.showDescriptions && place.description
+                ? place.description.slice(0, 70)
+                : "";
+            context.font = `600 ${latestRef.current.labels.fontSize * scale}px Manrope, sans-serif`;
+            const labelWidth = Math.min(
+              260 * scale,
+              Math.max(
+                80 * scale,
+                context.measureText(place.name).width + 18 * scale,
+                description
+                  ? context.measureText(description).width + 18 * scale
+                  : 0,
+              ),
+            );
+            const labelHeight = (description ? 42 : 27) * scale;
+            const photoSize =
+              (place.photo ? latestRef.current.photos.size : 0) * scale;
+            const calloutWidth = Math.max(labelWidth, photoSize);
+            const calloutHeight =
+              labelHeight + (place.photo ? photoSize + 6 * scale : 0);
+
+            const placement = placementById.get(String(placeIndex));
+            if (!placement) continue;
+            const centerX = (placement.box.left + placement.box.right) / 2;
+            const calloutBottom = placement.box.bottom;
+            const labelTop = calloutBottom - labelHeight;
+
+            if (place.photo) {
+              try {
+                const image = await loadImage(place.photo.dataUrl);
+                const size = photoSize;
+                const photoX = centerX - size / 2;
+                const photoY = labelTop - 6 * scale - size;
+                context.save();
+                const radius =
+                  ((latestRef.current.photos.radius / 100) * size) / 2;
+                context.beginPath();
+                context.roundRect(photoX, photoY, size, size, radius);
+                context.clip();
+                const imageRatio = image.width / image.height;
+                const zoomed = place.photo.zoom;
+                let sourceWidth = image.width / zoomed;
+                let sourceHeight = image.height / zoomed;
+                if (imageRatio > 1) sourceWidth = sourceHeight;
+                else sourceHeight = sourceWidth;
+                const sx =
+                  ((image.width - sourceWidth) * place.photo.cropX) / 100;
+                const sy =
+                  ((image.height - sourceHeight) * place.photo.cropY) / 100;
+                context.drawImage(
+                  image,
+                  sx,
+                  sy,
+                  sourceWidth,
+                  sourceHeight,
+                  photoX,
+                  photoY,
+                  size,
+                  size,
+                );
+                context.restore();
+                context.strokeStyle = latestRef.current.photos.borderColor;
+                context.lineWidth =
+                  latestRef.current.photos.borderWidth * scale;
+                context.beginPath();
+                context.roundRect(photoX, photoY, size, size, radius);
+                context.stroke();
+              } catch {
+                /* A broken local image should not block the map export. */
+              }
+            }
+            if (place.name) {
+              context.font = `600 ${latestRef.current.labels.fontSize * scale}px Manrope, sans-serif`;
+              context.fillStyle = latestRef.current.labels.backgroundColor;
+              context.strokeStyle = latestRef.current.labels.borderColor;
+              context.lineWidth = latestRef.current.labels.borderWidth * scale;
+              context.beginPath();
+              context.roundRect(
+                centerX - labelWidth / 2,
+                labelTop,
+                labelWidth,
+                labelHeight,
+                latestRef.current.labels.radius * scale,
+              );
+              context.fill();
+              context.stroke();
+              context.textAlign = "center";
+              context.fillStyle = latestRef.current.labels.textColor;
+              context.fillText(
+                place.name,
+                centerX,
+                calloutBottom - (description ? 23 : 9) * scale,
+              );
+              if (description) {
+                context.font = `400 ${Math.max(10, latestRef.current.labels.fontSize - 2) * scale}px Manrope, sans-serif`;
+                context.fillText(
+                  description,
+                  centerX,
+                  calloutBottom - 7 * scale,
+                  labelWidth - 12 * scale,
+                );
+              }
+            }
+            onProgress?.(
+              0.7 +
+                ((placeIndex + 1) /
+                  Math.max(1, latestRef.current.places.length)) *
+                  0.2,
+              "Drawing labels and photographs…",
+            );
+          }
+          let downloadCanvas = canvas;
+          if (output) {
+            downloadCanvas = document.createElement("canvas");
+            downloadCanvas.width = output.width;
+            downloadCanvas.height = output.height;
+            const outputContext = downloadCanvas.getContext("2d");
+            if (!outputContext)
+              throw new Error("The output canvas is unavailable.");
+            outputContext.fillStyle = "#f5f2ea";
+            outputContext.fillRect(0, 0, output.width, output.height);
+            const fitScale = Math.min(
+              output.width / canvas.width,
+              output.height / canvas.height,
+            );
+            const width = canvas.width * fitScale;
+            const height = canvas.height * fitScale;
+            outputContext.drawImage(
+              canvas,
+              (output.width - width) / 2,
+              (output.height - height) / 2,
+              width,
+              height,
+            );
+          }
+          checkCancelled();
+          onProgress?.(0.94, "Encoding image file…");
+          const file = await canvasFile(downloadCanvas, format);
+          checkCancelled();
+          onProgress?.(1, "Export ready");
+          return file;
         } finally {
           if (output && stage) {
             stage.style.width = originalWidth;
