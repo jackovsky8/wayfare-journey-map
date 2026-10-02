@@ -434,6 +434,31 @@ h2 {
   overflow: hidden;
 }
 
+.layout-progress {
+  position: absolute;
+  right: 12px;
+  top: 12px;
+  z-index: 5;
+  display: grid;
+  grid-template-columns: auto minmax(64px, 120px) auto;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100% - 24px);
+  padding: 7px 10px;
+  border: 1px solid #ffffff80;
+  border-radius: 999px;
+  background: #17251fe8;
+  color: #fff;
+  box-shadow: 0 4px 16px #17251f33;
+  font-size: 12px;
+  pointer-events: none;
+}
+
+.layout-progress progress {
+  width: 100%;
+  accent-color: #e7a84b;
+}
+
 .maplibregl-marker {
   z-index: 3;
 }

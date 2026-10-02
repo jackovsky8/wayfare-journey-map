@@ -1,4 +1,10 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
+import {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+} from "react";
 import maplibregl, {
   type Map as MapLibreMap,
   type StyleSpecification,
@@ -285,6 +291,7 @@ export const JourneyMap = forwardRef<JourneyMapHandle, Props>(
     const layoutWorkerRef = useRef<Worker | null>(null);
     const layoutRequestRef = useRef(0);
     const readyRef = useRef(false);
+    const [layoutProgress, setLayoutProgress] = useState<number | null>(null);
     const calloutEntriesRef = useRef<
       Array<{ element: HTMLDivElement; lngLat: [number, number] }>
     >([]);
@@ -310,6 +317,10 @@ export const JourneyMap = forwardRef<JourneyMapHandle, Props>(
       callouts,
       suspendLayout,
     };
+
+    useEffect(() => {
+      if (suspendLayout) setLayoutProgress(null);
+    }, [suspendLayout]);
 
     const fit = () => {
       const map = mapRef.current;
@@ -370,6 +381,7 @@ export const JourneyMap = forwardRef<JourneyMapHandle, Props>(
         options: { optimizationPasses: 4, startingLayouts: 2 },
         progressive: true,
       });
+      setLayoutProgress(0);
     };
 
     const renderCallouts = () => {
@@ -593,6 +605,8 @@ export const JourneyMap = forwardRef<JourneyMapHandle, Props>(
       worker.onmessage = (
         event: MessageEvent<{
           id: number;
+          phase: "preview" | "iteration" | "final";
+          progress?: number;
           placements: CalloutPlacement[];
         }>,
       ) => {
@@ -601,6 +615,10 @@ export const JourneyMap = forwardRef<JourneyMapHandle, Props>(
           latestRef.current.suspendLayout
         )
           return;
+        if (event.data.phase === "preview") setLayoutProgress(0.08);
+        else if (event.data.phase === "iteration")
+          setLayoutProgress(Math.max(0.1, event.data.progress ?? 0));
+        else setLayoutProgress(null);
         event.data.placements.forEach((placement, index) => {
           const element = calloutEntriesRef.current[index]?.element;
           if (!element) return;
@@ -999,6 +1017,13 @@ export const JourneyMap = forwardRef<JourneyMapHandle, Props>(
           className="callout-layer"
           aria-hidden="true"
         />
+        {layoutProgress !== null && (
+          <div className="layout-progress" role="status" aria-live="polite">
+            <span>Improving callouts</span>
+            <progress value={layoutProgress} max={1} />
+            <strong>{Math.round(layoutProgress * 100)}%</strong>
+          </div>
+        )}
       </div>
     );
   },

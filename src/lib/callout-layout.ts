@@ -308,12 +308,75 @@ const scoreLayout = (
   );
 };
 
+// The objective is a sum of costs belonging to one candidate and costs
+// belonging to a pair of candidates. Keeping these parts separate lets local
+// search evaluate one moved callout without rescoring every unrelated pair.
+const unaryScore = (
+  candidate: Candidate,
+  route: Point[],
+  viewport: { width: number; height: number },
+  options: LayoutOptions,
+) =>
+  (boxIntersectsPolyline(candidate.box, route, options.routeClearance ?? 8)
+    ? 300_000_000
+    : 0) +
+  boxOverflow(candidate.box, viewport, options.viewportMargin ?? 8) *
+    20_000_000 +
+  candidate.distance * 100 +
+  candidate.preference * 0.001;
+
+const pairScore = (a: Candidate, b: Candidate, options: LayoutOptions) => {
+  const padding = options.padding ?? 10;
+  const anchorDx = a.anchor.x - b.anchor.x;
+  const anchorDy = a.anchor.y - b.anchor.y;
+  const boxDx = (a.box.left + a.box.right) / 2 - (b.box.left + b.box.right) / 2;
+  const boxDy = (a.box.top + a.box.bottom) / 2 - (b.box.top + b.box.bottom) / 2;
+  return (
+    (boxesOverlap(a.box, b.box, padding) ? 1_000_000_000 : 0) +
+    overlapArea(a.box, b.box, padding) * 1_000_000 +
+    (segmentIntersectsBox(a.connectorStart, a.connectorEnd, b.box)
+      ? 150_000_000
+      : 0) +
+    (segmentIntersectsBox(b.connectorStart, b.connectorEnd, a.box)
+      ? 150_000_000
+      : 0) +
+    (segmentsCross(
+      a.connectorStart,
+      a.connectorEnd,
+      b.connectorStart,
+      b.connectorEnd,
+    )
+      ? 10_000_000
+      : 0) +
+    (Math.abs(anchorDx) > 2 && anchorDx * boxDx < 0 ? 7_500_000 : 0) +
+    (Math.abs(anchorDy) > 2 && anchorDy * boxDy < 0 ? 7_500_000 : 0)
+  );
+};
+
+const localScore = (
+  candidate: Candidate,
+  index: number,
+  placements: Candidate[],
+  baseScore: number,
+  maximumOtherDistance: number,
+  options: LayoutOptions,
+) => {
+  let score =
+    baseScore + Math.max(candidate.distance, maximumOtherDistance) * 25;
+  for (let other = 0; other < placements.length; other += 1) {
+    if (other !== index && placements[other])
+      score += pairScore(candidate, placements[other], options);
+  }
+  return score;
+};
+
 const optimize = (
   initial: Candidate[],
   candidates: Candidate[][],
   route: Point[],
   viewport: { width: number; height: number },
   options: LayoutOptions,
+  unaryScores: number[][],
   onIteration?: (placements: Candidate[], progress: number) => void,
 ) => {
   const placements = [...initial];
@@ -324,29 +387,39 @@ const optimize = (
     const passStartScore = score;
     for (let index = 0; index < placements.length; index += 1) {
       let best = placements[index];
-      let bestScore = score;
-      for (const candidate of candidates[index]) {
-        if (candidate === placements[index]) continue;
-        const previous = placements[index];
-        placements[index] = candidate;
-        const candidateScore = scoreLayout(
+      let bestLocalScore = Number.POSITIVE_INFINITY;
+      let maximumOtherDistance = 0;
+      for (let other = 0; other < placements.length; other += 1)
+        if (other !== index)
+          maximumOtherDistance = Math.max(
+            maximumOtherDistance,
+            placements[other].distance,
+          );
+      for (
+        let candidateIndex = 0;
+        candidateIndex < candidates[index].length;
+        candidateIndex += 1
+      ) {
+        const candidate = candidates[index][candidateIndex];
+        const candidateScore = localScore(
+          candidate,
+          index,
           placements,
-          route,
-          viewport,
+          unaryScores[index][candidateIndex],
+          maximumOtherDistance,
           options,
         );
-        placements[index] = previous;
-        if (candidateScore < bestScore) {
+        if (candidateScore < bestLocalScore) {
           best = candidate;
-          bestScore = candidateScore;
+          bestLocalScore = candidateScore;
         }
       }
       if (best !== placements[index]) {
         placements[index] = best;
-        score = bestScore;
         improved = true;
       }
     }
+    score = scoreLayout(placements, route, viewport, options);
     const improvement = passStartScore - score;
     if (improved) onIteration?.(placements, (pass + 1) / passes);
     if (!improved || improvement <= (options.minimumImprovement ?? 0.5)) break;
@@ -446,6 +519,9 @@ export function layoutCallouts(
       options.viewportMargin ?? 8,
     ),
   );
+  const unaryScores = candidates.map((list) =>
+    list.map((candidate) => unaryScore(candidate, route, viewport, options)),
+  );
 
   const orders = [
     items
@@ -477,9 +553,15 @@ export function layoutCallouts(
     order.forEach((index) => {
       let chosen = candidates[index][0];
       let chosenScore = Number.POSITIVE_INFINITY;
-      candidates[index].forEach((candidate) => {
-        const partial = [...initial.filter(Boolean), candidate];
-        const score = scoreLayout(partial, route, viewport, options);
+      candidates[index].forEach((candidate, candidateIndex) => {
+        const assigned = initial.filter(Boolean);
+        const score =
+          unaryScores[index][candidateIndex] +
+          candidate.distance * 25 +
+          assigned.reduce(
+            (sum, other) => sum + pairScore(candidate, other, options),
+            0,
+          );
         if (score < chosenScore) {
           chosen = candidate;
           chosenScore = score;
@@ -493,6 +575,7 @@ export function layoutCallouts(
       route,
       viewport,
       options,
+      unaryScores,
       (placements, passProgress) => {
         const candidate = {
           placements: [...placements],
