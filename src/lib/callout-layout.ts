@@ -30,6 +30,7 @@ export interface LayoutOptions {
   distanceStep?: number;
   optimizationPasses?: number;
   startingLayouts?: number;
+  minimumImprovement?: number;
 }
 
 export const boxesOverlap = (a: Box, b: Box, padding = 0) =>
@@ -111,6 +112,8 @@ const candidateBoxes = (
   min: number,
   max: number,
   step: number,
+  viewport: { width: number; height: number },
+  margin: number,
 ) => {
   const directions = [
     [0, -1],
@@ -137,11 +140,25 @@ const candidateBoxes = (
           : dy < 0
             ? item.anchor.y - distance - item.height
             : item.anchor.y + distance;
+      // Keep every proposed box on the canvas. A hard constraint here is both
+      // faster and more reliable than asking the scorer to repair overflow.
+      const usableWidth = Math.max(0, viewport.width - margin * 2);
+      const usableHeight = Math.max(0, viewport.height - margin * 2);
+      const width = Math.min(item.width, usableWidth);
+      const height = Math.min(item.height, usableHeight);
+      const boundedLeft = Math.max(
+        margin,
+        Math.min(left, viewport.width - margin - width),
+      );
+      const boundedTop = Math.max(
+        margin,
+        Math.min(top, viewport.height - margin - height),
+      );
       result.push({
-        left,
-        right: left + item.width,
-        top,
-        bottom: top + item.height,
+        left: boundedLeft,
+        right: boundedLeft + width,
+        top: boundedTop,
+        bottom: boundedTop + height,
       });
     });
   return result;
@@ -157,25 +174,29 @@ const createCandidates = (
   min: number,
   max: number,
   step: number,
+  viewport: { width: number; height: number },
+  margin: number,
 ): Candidate[] =>
-  candidateBoxes(item, min, max, step).map((box, preference) => {
-    const connectorStart = nearestPoint(item.anchor, box);
-    return {
-      ...item,
-      box,
-      offset: [
-        (box.left + box.right) / 2 - item.anchor.x,
-        box.bottom - item.anchor.y,
-      ],
-      connectorStart,
-      connectorEnd: item.anchor,
-      preference,
-      distance: Math.hypot(
-        connectorStart.x - item.anchor.x,
-        connectorStart.y - item.anchor.y,
-      ),
-    };
-  });
+  candidateBoxes(item, min, max, step, viewport, margin).map(
+    (box, preference) => {
+      const connectorStart = nearestPoint(item.anchor, box);
+      return {
+        ...item,
+        box,
+        offset: [
+          (box.left + box.right) / 2 - item.anchor.x,
+          box.bottom - item.anchor.y,
+        ],
+        connectorStart,
+        connectorEnd: item.anchor,
+        preference,
+        distance: Math.hypot(
+          connectorStart.x - item.anchor.x,
+          connectorStart.y - item.anchor.y,
+        ),
+      };
+    },
+  );
 
 export interface LayoutMetrics {
   overlaps: number;
@@ -185,6 +206,8 @@ export interface LayoutMetrics {
   overflow: number;
   totalDistance: number;
   maximumDistance: number;
+  horizontalOrderViolations: number;
+  verticalOrderViolations: number;
 }
 
 export function measureLayout(
@@ -204,6 +227,8 @@ export function measureLayout(
     overflow: 0,
     totalDistance: 0,
     maximumDistance: 0,
+    horizontalOrderViolations: 0,
+    verticalOrderViolations: 0,
   };
   placements.forEach((placement) => {
     const distance = Math.hypot(
@@ -220,6 +245,19 @@ export function measureLayout(
     for (let second = first + 1; second < placements.length; second += 1) {
       const a = placements[first];
       const b = placements[second];
+      const anchorDx = a.anchor.x - b.anchor.x;
+      const anchorDy = a.anchor.y - b.anchor.y;
+      const boxDx =
+        (a.box.left + a.box.right) / 2 - (b.box.left + b.box.right) / 2;
+      const boxDy =
+        (a.box.top + a.box.bottom) / 2 - (b.box.top + b.box.bottom) / 2;
+      // Ignore virtually aligned anchors. Otherwise preserve their spatial
+      // order so a viewer can associate labels with pins before following a
+      // connector.
+      if (Math.abs(anchorDx) > 2 && anchorDx * boxDx < 0)
+        metrics.horizontalOrderViolations += 1;
+      if (Math.abs(anchorDy) > 2 && anchorDy * boxDy < 0)
+        metrics.verticalOrderViolations += 1;
       if (boxesOverlap(a.box, b.box, padding)) metrics.overlaps += 1;
       if (
         segmentsCross(
@@ -261,6 +299,8 @@ const scoreLayout = (
     metrics.routeIntersections * 300_000_000 +
     metrics.connectorBoxIntersections * 150_000_000 +
     metrics.connectorCrossings * 10_000_000 +
+    metrics.horizontalOrderViolations * 7_500_000 +
+    metrics.verticalOrderViolations * 7_500_000 +
     metrics.overflow * 20_000_000 +
     metrics.totalDistance * 100 +
     metrics.maximumDistance * 25 +
@@ -274,11 +314,14 @@ const optimize = (
   route: Point[],
   viewport: { width: number; height: number },
   options: LayoutOptions,
+  onIteration?: (placements: Candidate[], progress: number) => void,
 ) => {
   const placements = [...initial];
   let score = scoreLayout(placements, route, viewport, options);
-  for (let pass = 0; pass < (options.optimizationPasses ?? 8); pass += 1) {
+  const passes = options.optimizationPasses ?? 8;
+  for (let pass = 0; pass < passes; pass += 1) {
     let improved = false;
+    const passStartScore = score;
     for (let index = 0; index < placements.length; index += 1) {
       let best = placements[index];
       let bestScore = score;
@@ -304,7 +347,9 @@ const optimize = (
         improved = true;
       }
     }
-    if (!improved) break;
+    const improvement = passStartScore - score;
+    if (improved) onIteration?.(placements, (pass + 1) / passes);
+    if (!improved || improvement <= (options.minimumImprovement ?? 0.5)) break;
   }
   return { placements, score };
 };
@@ -319,12 +364,23 @@ export function layoutCalloutsFast(
   const clearance = options.routeClearance ?? 8;
   const margin = options.viewportMargin ?? 8;
   const placed: Candidate[] = [];
-  items.forEach((item) => {
+  const center = { x: viewport.width / 2, y: viewport.height / 2 };
+  const order = items
+    .map((item, index) => ({
+      item,
+      index,
+      radius: Math.hypot(item.anchor.x - center.x, item.anchor.y - center.y),
+    }))
+    .sort((a, b) => a.radius - b.radius);
+  const byIndex = new Array<Candidate>(items.length);
+  order.forEach(({ item, index }) => {
     const candidates = createCandidates(
       item,
       options.minDistance ?? 18,
       options.maxDistance ?? 242,
       options.distanceStep ?? 32,
+      viewport,
+      margin,
     );
     let best = candidates[0];
     let bestScore = Number.POSITIVE_INFINITY;
@@ -363,8 +419,9 @@ export function layoutCalloutsFast(
       }
     });
     placed.push(best);
+    byIndex[index] = best;
   });
-  return placed.map(
+  return byIndex.map(
     ({ preference: _preference, distance: _distance, ...placement }) =>
       placement,
   );
@@ -376,6 +433,7 @@ export function layoutCallouts(
   viewport: { width: number; height: number },
   options: LayoutOptions = {},
   onProgress?: (progress: number) => void,
+  onIteration?: (placements: CalloutPlacement[], progress: number) => void,
 ): CalloutPlacement[] {
   if (!items.length) return [];
   const candidates = items.map((item) =>
@@ -384,10 +442,22 @@ export function layoutCallouts(
       options.minDistance ?? 18,
       options.maxDistance ?? 242,
       options.distanceStep ?? 32,
+      viewport,
+      options.viewportMargin ?? 8,
     ),
   );
 
   const orders = [
+    items
+      .map((item, index) => ({
+        index,
+        radius: Math.hypot(
+          item.anchor.x - viewport.width / 2,
+          item.anchor.y - viewport.height / 2,
+        ),
+      }))
+      .sort((a, b) => a.radius - b.radius)
+      .map(({ index }) => index),
     items.map((_, index) => index),
     items.map((_, index) => index).reverse(),
     items
@@ -417,8 +487,42 @@ export function layoutCallouts(
       });
       initial[index] = chosen;
     });
-    const optimized = optimize(initial, candidates, route, viewport, options);
-    if (!best || optimized.score < best.score) best = optimized;
+    const optimized = optimize(
+      initial,
+      candidates,
+      route,
+      viewport,
+      options,
+      (placements, passProgress) => {
+        const candidate = {
+          placements: [...placements],
+          score: scoreLayout(placements, route, viewport, options),
+        };
+        if (!best || candidate.score < best.score) {
+          best = candidate;
+          onIteration?.(
+            candidate.placements.map(
+              ({
+                preference: _preference,
+                distance: _distance,
+                ...placement
+              }) => placement,
+            ),
+            (orderIndex + passProgress) / selectedOrders.length,
+          );
+        }
+      },
+    );
+    if (!best || optimized.score < best.score) {
+      best = optimized;
+      onIteration?.(
+        optimized.placements.map(
+          ({ preference: _preference, distance: _distance, ...placement }) =>
+            placement,
+        ),
+        (orderIndex + 1) / selectedOrders.length,
+      );
+    }
     onProgress?.((orderIndex + 1) / selectedOrders.length);
   });
 

@@ -25,17 +25,24 @@ self.onmessage = (event: MessageEvent<LayoutRequest>) => {
     self.postMessage({
       id,
       phase: "final",
-      placements: layoutCallouts(items, route, viewport, options, (progress) =>
-        self.postMessage({ id, phase: "progress", progress }),
+      placements: layoutCallouts(
+        items,
+        route,
+        viewport,
+        options,
+        (progress) => self.postMessage({ id, phase: "progress", progress }),
+        (placements, progress) =>
+          self.postMessage({ id, phase: "iteration", placements, progress }),
       ),
     });
     return;
   }
 
+  const preview = layoutCalloutsFast(items, route, viewport, options);
   self.postMessage({
     id,
     phase: "preview",
-    placements: layoutCalloutsFast(items, route, viewport, options),
+    placements: preview,
   });
   pending = request;
   if (refinementTimer !== undefined) clearTimeout(refinementTimer);
@@ -52,6 +59,14 @@ self.onmessage = (event: MessageEvent<LayoutRequest>) => {
         latest.route,
         latest.viewport,
         latest.options,
+        undefined,
+        (placements, progress) =>
+          self.postMessage({
+            id: latest.id,
+            phase: "iteration",
+            placements,
+            progress,
+          }),
       ),
     });
   }, 90);

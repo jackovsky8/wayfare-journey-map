@@ -29,7 +29,7 @@ Wayfare is a frontend-only travel-map editor for turning places, stories, photog
 - Configure photograph size, frame color, frame width, and corner roundness once in **Settings → Photograph style**.
 - Use the same global photograph appearance in the crop preview, live map, and exported image.
 - Place labels and photographs with a screen-space geometry engine.
-- Prefer the closest available position while avoiding the route, map edge, and every other callout.
+- Prefer the closest available position while avoiding the route, map edge, and every other callout. Spatial order is preserved where possible: a place farther right or lower on the map also keeps its callout farther right or lower.
 - Recalculate placement while the map pans, zooms, resizes, or changes style.
 - Position cards and arrows in one shared map overlay, so connectors meet the exact card edge and place coordinate without marker-offset drift.
 - Run collision placement in a Web Worker so route geometry does not block editing or scrolling.
@@ -112,7 +112,7 @@ Browser storage is still finite and controlled by the browser or operating syste
 
 ## Callout layout optimization
 
-Labels, photographs, and their connectors are placed as one global optimization problem in a Web Worker. The worker immediately returns a fast collision-aware preview, then—after map movement settles—replaces it with a refined layout. This prevents unplaced callouts appearing in the top-left corner and keeps panning responsive. Wayfare evaluates several initial arrangements and repeatedly improves the complete layout instead of fixing callouts one by one. The objective prioritizes avoiding callout overlap, keeping callouts off the route and inside the map, preventing arrows from passing through other callouts, reducing connector crossings, and then minimizing total and worst-case distance from each place. A callout may therefore move slightly farther away when that produces a substantially clearer overall composition. Image export waits for the complete higher-quality optimization and uses the same geometry.
+Labels, photographs, and their connectors are placed as one global optimization problem in a Web Worker. The worker immediately returns a fast collision-aware preview, then publishes every better arrangement while refinement continues. This prevents unplaced callouts appearing in the top-left corner and keeps panning responsive. Wayfare begins with the places nearest the map center, leaves connector corridors for the remaining places, and continues outward. It then moves callouts repeatedly until no candidate improves the score or the remaining improvement is negligible. The objective prioritizes avoiding callout overlap, keeping every callout inside the visible map and off the route, preventing arrows from passing through other callouts, reducing connector crossings, preserving the left/right and top/bottom order of the places, and then minimizing total and worst-case distance. A callout may therefore move slightly farther away when that produces a substantially clearer overall composition. Image export waits for the complete higher-quality optimization and uses the same geometry.
 
 ## Local development
 

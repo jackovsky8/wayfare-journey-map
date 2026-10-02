@@ -130,6 +130,51 @@ describe("callout collision layout", () => {
     expect(boxesOverlap(placements[0].box, placements[1].box, 10)).toBe(false);
   });
 
+  it("keeps boxes visible and preserves the anchors' spatial order", () => {
+    const viewport = { width: 360, height: 280 };
+    const placements = layoutCallouts(
+      [
+        { id: "top-left", anchor: { x: 35, y: 35 }, width: 100, height: 55 },
+        { id: "middle", anchor: { x: 180, y: 140 }, width: 100, height: 55 },
+        {
+          id: "bottom-right",
+          anchor: { x: 330, y: 245 },
+          width: 100,
+          height: 55,
+        },
+      ],
+      [],
+      viewport,
+    );
+    for (const { box } of placements) {
+      expect(box.left).toBeGreaterThanOrEqual(8);
+      expect(box.top).toBeGreaterThanOrEqual(8);
+      expect(box.right).toBeLessThanOrEqual(viewport.width - 8);
+      expect(box.bottom).toBeLessThanOrEqual(viewport.height - 8);
+    }
+    const metrics = measureLayout(placements, [], viewport);
+    expect(metrics.horizontalOrderViolations).toBe(0);
+    expect(metrics.verticalOrderViolations).toBe(0);
+  });
+
+  it("publishes improving layouts during refinement", () => {
+    const iterations: number[] = [];
+    layoutCallouts(
+      [
+        { id: "a", anchor: { x: 140, y: 130 }, width: 90, height: 50 },
+        { id: "b", anchor: { x: 155, y: 145 }, width: 90, height: 50 },
+        { id: "c", anchor: { x: 170, y: 160 }, width: 90, height: 50 },
+      ],
+      [],
+      { width: 320, height: 300 },
+      {},
+      undefined,
+      (placements) => iterations.push(placements.length),
+    );
+    expect(iterations.length).toBeGreaterThan(0);
+    expect(iterations.every((length) => length === 3)).toBe(true);
+  });
+
   it("creates straight and curved connector paths", () => {
     expect(connectorPath({ x: 0, y: 0 }, { x: 10, y: 10 }, false)).toContain(
       " L ",

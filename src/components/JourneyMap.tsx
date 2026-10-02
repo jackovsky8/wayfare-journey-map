@@ -140,12 +140,16 @@ const computeLayoutInBackground = (
     signal?.addEventListener("abort", abort, { once: true });
     worker.onmessage = (
       event: MessageEvent<{
-        phase: "progress" | "final";
+        phase: "progress" | "iteration" | "final";
         progress?: number;
         placements?: CalloutPlacement[];
       }>,
     ) => {
       if (event.data.phase === "progress") {
+        onProgress?.(event.data.progress ?? 0);
+        return;
+      }
+      if (event.data.phase === "iteration") {
         onProgress?.(event.data.progress ?? 0);
         return;
       }
