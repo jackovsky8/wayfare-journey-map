@@ -174,7 +174,7 @@ test("explains the workflow and offers every export format", async ({
   await page.getByLabel("Page or photo-book format").selectOption("a4-p");
   await expect(page.getByLabel("Image file format")).toHaveValue("png");
   await expect(
-    page.getByRole("button", { name: "Download image" }),
+    page.getByRole("button", { name: "Calculate image" }),
   ).toBeVisible();
   await expect(
     page.getByRole("button", {
@@ -187,6 +187,8 @@ test("explains the workflow and offers every export format", async ({
 test("calculates an image before a user-triggered download", async ({
   page,
 }) => {
+  await expect(page.getByRole("button", { name: "Export" })).toBeDisabled();
+  await addPlace(page, "Vienna");
   await page.getByRole("button", { name: "Export" }).click();
   await page.getByRole("button", { name: "Calculate image" }).click();
   await expect(page.getByText("Composing your journey map")).toBeVisible();
