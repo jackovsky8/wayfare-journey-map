@@ -99,6 +99,10 @@ test("imports a GPX track and connects it in the journey sequence", async ({
   await expect(
     page.getByText("Tracks").locator("..").getByText("1"),
   ).toBeVisible();
+  await page.getByRole("button", { name: "Edit" }).nth(1).click();
+  await page.getByRole("button", { name: "Add start place" }).click();
+  await expect(page.getByLabel("Name for Morning walk start")).toBeVisible();
+  await page.getByRole("button", { name: "Close Edit GPX track" }).click();
 });
 
 test("adds and styles a place photograph", async ({ page }) => {
@@ -182,4 +186,13 @@ test("persists the full journey in browser storage", async ({ page }) => {
   await addPlace(page, "Vienna");
   await page.reload();
   await expect(page.getByLabel("Name for item 1")).toHaveValue("Vienna");
+});
+
+test("creates a self-contained share URL and QR code", async ({ page }) => {
+  await addPlace(page, "Vienna");
+  await page.getByRole("button", { name: "Share journey" }).click();
+  await expect(
+    page.getByAltText("QR code containing the shared journey URL"),
+  ).toBeVisible();
+  await expect(page.getByLabel("Shareable URL")).toHaveValue(/\?journey=/);
 });

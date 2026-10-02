@@ -76,6 +76,36 @@ const loadImage = (source: string) =>
     image.src = source;
   });
 
+const saveCanvas = async (
+  canvas: HTMLCanvasElement,
+  format: "png" | "jpeg" | "webp",
+) => {
+  const mime = `image/${format}`;
+  const extension = format === "jpeg" ? "jpg" : format;
+  const blob = await new Promise<Blob | null>((resolve) =>
+    canvas.toBlob(resolve, mime, 0.94),
+  );
+  if (!blob) throw new Error("The browser could not create the image file.");
+  const file = new File([blob], `journey-map.${extension}`, { type: mime });
+  if (navigator.share && navigator.canShare?.({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file], title: "Journey map" });
+      return;
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+    }
+  }
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = file.name;
+  anchor.target = "_blank";
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
+};
+
 const svgNamespace = "http://www.w3.org/2000/svg";
 const computeLayoutInBackground = (
   items: CalloutItem[],
@@ -629,6 +659,23 @@ export const JourneyMap = forwardRef<JourneyMapHandle, Props>(
       exportImage: async (format, output) => {
         const map = mapRef.current;
         if (!map) return;
+        const stage = map.getContainer().parentElement;
+        const originalHeight = stage?.style.height ?? "";
+        const originalWidth = stage?.style.width ?? "";
+        if (output && stage) {
+          const previewWidth = Math.min(
+            2000,
+            Math.max(640, output.width / Math.max(1, devicePixelRatio)),
+          );
+          stage.style.width = `${previewWidth}px`;
+          stage.style.height = `${previewWidth * (output.height / output.width)}px`;
+          map.resize();
+          const moved = new Promise<void>((resolve) =>
+            map.once("moveend", () => resolve()),
+          );
+          fit();
+          await moved;
+        }
         await new Promise<void>((resolve) =>
           map.loaded() ? resolve() : map.once("idle", () => resolve()),
         );
@@ -846,10 +893,16 @@ export const JourneyMap = forwardRef<JourneyMapHandle, Props>(
             height,
           );
         }
-        const anchor = document.createElement("a");
-        anchor.download = `journey-map.${format === "jpeg" ? "jpg" : format}`;
-        anchor.href = downloadCanvas.toDataURL(`image/${format}`, 0.94);
-        anchor.click();
+        try {
+          await saveCanvas(downloadCanvas, format);
+        } finally {
+          if (output && stage) {
+            stage.style.width = originalWidth;
+            stage.style.height = originalHeight;
+            map.resize();
+            if (autoFit) fit();
+          }
+        }
       },
     }));
 

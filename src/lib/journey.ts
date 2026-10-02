@@ -104,7 +104,7 @@ export const parseGpx = (xmlText: string, fileName: string): GpxTrack => {
   };
 };
 
-export const resizeImage = (file: File, maxSide = 1400): Promise<string> =>
+export const resizeImage = (file: File, maxSide = 1024): Promise<string> =>
   new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onerror = () => reject(new Error("The image could not be read."));
@@ -123,7 +123,7 @@ export const resizeImage = (file: File, maxSide = 1400): Promise<string> =>
         canvas
           .getContext("2d")
           ?.drawImage(image, 0, 0, canvas.width, canvas.height);
-        resolve(canvas.toDataURL("image/jpeg", 0.86));
+        resolve(canvas.toDataURL("image/jpeg", 0.8));
       };
       image.src = String(reader.result);
     };
@@ -144,6 +144,46 @@ export const moveItem = <T>(items: T[], from: number, to: number): T[] => {
   copy.splice(to, 0, item);
   return copy;
 };
+
+export function splitTrackAtPlace(
+  track: GpxTrack,
+  place: Place,
+): [GpxTrack, Place, GpxTrack] {
+  if (track.coordinates.length < 3)
+    throw new Error("A track needs at least three points to be split.");
+  let closestIndex = 0;
+  let closestDistance = Number.POSITIVE_INFINITY;
+  track.coordinates.forEach((coordinate, index) => {
+    const distance = distanceBetween(coordinate, [place.lng, place.lat]);
+    if (distance < closestDistance) {
+      closestDistance = distance;
+      closestIndex = index;
+    }
+  });
+  closestIndex = Math.max(
+    1,
+    Math.min(track.coordinates.length - 2, closestIndex),
+  );
+  const [lng, lat] = track.coordinates[closestIndex];
+  const cutPlace = { ...place, lng, lat };
+  return [
+    {
+      ...track,
+      id: crypto.randomUUID(),
+      name: `${track.name} · before ${place.name}`,
+      coordinates: track.coordinates.slice(0, closestIndex + 1),
+      endPlace: undefined,
+    },
+    cutPlace,
+    {
+      ...track,
+      id: crypto.randomUUID(),
+      name: `${track.name} · after ${place.name}`,
+      coordinates: track.coordinates.slice(closestIndex),
+      startPlace: undefined,
+    },
+  ];
+}
 
 export const formatDistance = (meters: number): string =>
   meters >= 1000
@@ -167,7 +207,13 @@ export const buildGpx = (
   items: JourneyItem[],
   route: RouteGeometry,
 ): string => {
-  const places = items.filter((item): item is Place => item.type === "place");
+  const places = items.flatMap((item) =>
+    item.type === "place"
+      ? [item]
+      : [item.startPlace, item.endPlace].filter((place): place is Place =>
+          Boolean(place),
+        ),
+  );
   return `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="Wayfare" xmlns="http://www.topografix.com/GPX/1/1">\n  <metadata><name>My journey</name></metadata>\n${places.map((place) => `  <wpt lat="${place.lat}" lon="${place.lng}"><name>${xml(place.name)}</name><desc>${xml(place.description)}</desc></wpt>`).join("\n")}\n  <trk><name>My journey</name><trkseg>\n${route.coordinates.map(([lng, lat]) => `    <trkpt lat="${lat}" lon="${lng}" />`).join("\n")}\n  </trkseg></trk>\n</gpx>`;
 };
 
@@ -176,6 +222,9 @@ export const downloadText = (name: string, content: string, type: string) => {
   const anchor = document.createElement("a");
   anchor.href = url;
   anchor.download = name;
+  anchor.target = "_blank";
+  document.body.append(anchor);
   anchor.click();
-  URL.revokeObjectURL(url);
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
 };

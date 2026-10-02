@@ -13,8 +13,11 @@ import {
   MapPin,
   Palette,
   Plus,
+  QrCode,
   Route,
+  Scissors,
   Search,
+  Share2,
   Settings2,
   SlidersHorizontal,
   Trash2,
@@ -22,6 +25,7 @@ import {
   Upload,
   X,
 } from "lucide-react";
+import qrcode from "qrcode-generator";
 import { JourneyMap, type JourneyMapHandle } from "./components/JourneyMap";
 import {
   buildGpx,
@@ -32,7 +36,9 @@ import {
   moveItem,
   parseGpx,
   resizeImage,
+  splitTrackAtPlace,
 } from "./lib/journey";
+import { decodeJourney, journeyUrl, shareSizeWarning } from "./lib/share";
 import { BUILT_IN_MAPS, findMap } from "./lib/maps";
 import {
   routeWithMapbox,
@@ -42,10 +48,12 @@ import {
 } from "./lib/providers";
 import type {
   AppSettings,
+  GpxTrack,
   JourneyItem,
   MapSource,
   MapSourceKind,
   MarkerKind,
+  PhotoAppearance,
   PhotoStyle,
   Place,
   RouteGeometry,
@@ -68,46 +76,74 @@ const EXPORT_PRESETS = [
     height: 0,
   },
   {
+    id: "a3-p",
+    label: "A3 portrait",
+    detail: "297 × 420 mm · print",
+    width: 2806,
+    height: 3969,
+  },
+  {
+    id: "a3-l",
+    label: "A3 landscape",
+    detail: "420 × 297 mm · print",
+    width: 3969,
+    height: 2806,
+  },
+  {
     id: "a4-p",
     label: "A4 portrait",
-    detail: "210 × 297 mm · 150 dpi",
-    width: 1240,
-    height: 1754,
+    detail: "210 × 297 mm · print",
+    width: 2480,
+    height: 3508,
   },
   {
     id: "a4-l",
     label: "A4 landscape",
-    detail: "297 × 210 mm · 150 dpi",
-    width: 1754,
-    height: 1240,
+    detail: "297 × 210 mm · print",
+    width: 3508,
+    height: 2480,
   },
   {
     id: "a5-p",
     label: "A5 portrait",
-    detail: "148 × 210 mm · 150 dpi",
-    width: 874,
-    height: 1240,
+    detail: "148 × 210 mm · print",
+    width: 1748,
+    height: 2480,
   },
   {
     id: "a5-l",
     label: "A5 landscape",
-    detail: "210 × 148 mm · 150 dpi",
-    width: 1240,
-    height: 874,
+    detail: "210 × 148 mm · print",
+    width: 2480,
+    height: 1748,
+  },
+  {
+    id: "letter-p",
+    label: "US Letter portrait",
+    detail: "8.5 × 11 in",
+    width: 2550,
+    height: 3300,
+  },
+  {
+    id: "letter-l",
+    label: "US Letter landscape",
+    detail: "11 × 8.5 in",
+    width: 3300,
+    height: 2550,
   },
   {
     id: "book-square",
     label: "Photo book square",
     detail: "20 × 20 cm",
-    width: 1600,
-    height: 1600,
+    width: 2362,
+    height: 2362,
   },
   {
     id: "book-l",
     label: "Photo book landscape",
     detail: "28 × 21 cm",
-    width: 1680,
-    height: 1260,
+    width: 3307,
+    height: 2480,
   },
   {
     id: "photo-10x15",
@@ -115,6 +151,48 @@ const EXPORT_PRESETS = [
     detail: "10 × 15 cm",
     width: 1200,
     height: 1800,
+  },
+  {
+    id: "photo-13x18",
+    label: "Photo print",
+    detail: "13 × 18 cm",
+    width: 1560,
+    height: 2160,
+  },
+  {
+    id: "photo-20x30",
+    label: "Photo poster",
+    detail: "20 × 30 cm",
+    width: 2400,
+    height: 3600,
+  },
+  {
+    id: "screen-16x9",
+    label: "Full HD screen",
+    detail: "16:9 · 1920 × 1080",
+    width: 1920,
+    height: 1080,
+  },
+  {
+    id: "screen-4x3",
+    label: "Classic screen",
+    detail: "4:3 · 1600 × 1200",
+    width: 1600,
+    height: 1200,
+  },
+  {
+    id: "screen-square",
+    label: "Square screen",
+    detail: "1:1 · 1600 × 1600",
+    width: 1600,
+    height: 1600,
+  },
+  {
+    id: "screen-story",
+    label: "Phone story",
+    detail: "9:16 · 1080 × 1920",
+    width: 1080,
+    height: 1920,
   },
 ] as const;
 
@@ -149,6 +227,15 @@ const defaults: AppSettings = {
   customMaps: [],
 };
 
+function sharedFromUrl() {
+  try {
+    const encoded = new URLSearchParams(location.search).get("journey");
+    return encoded ? decodeJourney(encoded) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 const defaultPhoto = (dataUrl: string, fileName: string): PhotoStyle => ({
   dataUrl,
   fileName,
@@ -159,6 +246,8 @@ const defaultPhoto = (dataUrl: string, fileName: string): PhotoStyle => ({
 
 function loadItems(): JourneyItem[] {
   try {
+    const shared = sharedFromUrl();
+    if (shared) return shared.items;
     const current = JSON.parse(
       localStorage.getItem(STORAGE_KEY) || "[]",
     ) as JourneyItem[];
@@ -183,15 +272,25 @@ function loadItems(): JourneyItem[] {
 
 function loadSettings(): AppSettings {
   try {
+    const shared = sharedFromUrl();
     const saved = JSON.parse(
       localStorage.getItem(SETTINGS_KEY) || "{}",
     ) as Partial<AppSettings>;
     return {
       ...defaults,
-      ...saved,
-      labels: { ...defaults.labels, ...saved.labels },
-      photos: { ...defaults.photos, ...saved.photos },
-      callouts: { ...defaults.callouts, ...saved.callouts },
+      ...(shared?.settings ?? saved),
+      labels: {
+        ...defaults.labels,
+        ...(shared?.settings.labels ?? saved.labels),
+      },
+      photos: {
+        ...defaults.photos,
+        ...(shared?.settings.photos ?? saved.photos),
+      },
+      callouts: {
+        ...defaults.callouts,
+        ...(shared?.settings.callouts ?? saved.callouts),
+      },
       mapboxToken: sessionStorage.getItem("wayfare.mapbox") || "",
     };
   } catch {
@@ -215,6 +314,10 @@ export function App() {
   );
   const [exportPreset, setExportPreset] = useState("screen");
   const [editingPlace, setEditingPlace] = useState<string | null>(null);
+  const [editingTrack, setEditingTrack] = useState<string | null>(null);
+  const [trackQuery, setTrackQuery] = useState("");
+  const [trackResults, setTrackResults] = useState<SearchResult[]>([]);
+  const [shareOpen, setShareOpen] = useState(false);
   const [routeStatus, setRouteStatus] = useState<
     "idle" | "routing" | "fallback"
   >("idle");
@@ -233,10 +336,46 @@ export function App() {
     () => items.filter((item): item is Place => item.type === "place"),
     [items],
   );
+  const mapPlaces = useMemo(
+    () =>
+      items.flatMap((item) =>
+        item.type === "place"
+          ? [item]
+          : [item.startPlace, item.endPlace].filter((place): place is Place =>
+              Boolean(place),
+            ),
+      ),
+    [items],
+  );
   const tracks = items.filter((item) => item.type === "track");
   const allMaps = [...BUILT_IN_MAPS, ...settings.customMaps];
   const activeMap = findMap(settings.mapStyle, settings.customMaps);
   const activePlace = places.find((place) => place.id === editingPlace);
+  const activeTrack = items.find(
+    (item): item is GpxTrack =>
+      item.type === "track" && item.id === editingTrack,
+  );
+  const safeSettings = useMemo(() => {
+    const { mapboxToken: _token, ...safe } = settings;
+    return safe;
+  }, [settings]);
+  const sharedUrl = useMemo(
+    () => journeyUrl({ version: 1, items, settings: safeSettings }, location),
+    [items, safeSettings],
+  );
+  const photoCount = mapPlaces.filter((place) => place.photo).length;
+  const shareWarning = shareSizeWarning(sharedUrl, photoCount);
+  const qrDataUrl = useMemo(() => {
+    if (shareWarning) return "";
+    try {
+      const qr = qrcode(0, "M");
+      qr.addData(sharedUrl, "Byte");
+      qr.make();
+      return qr.createDataURL(5, 8);
+    } catch {
+      return "";
+    }
+  }, [sharedUrl, shareWarning]);
 
   useEffect(() => {
     try {
@@ -276,6 +415,23 @@ export function App() {
       controller.abort();
     };
   }, [query]);
+
+  useEffect(() => {
+    if (!editingTrack || trackQuery.trim().length < 2) {
+      setTrackResults([]);
+      return;
+    }
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => {
+      void searchPlaces(trackQuery, controller.signal)
+        .then(setTrackResults)
+        .catch(() => setTrackResults([]));
+    }, 300);
+    return () => {
+      clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [trackQuery, editingTrack]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -346,6 +502,55 @@ export function App() {
         item.id === id && item.type === "place" ? { ...item, ...patch } : item,
       ),
     );
+
+  const updateTrack = (id: string, patch: Partial<GpxTrack>) =>
+    setItems((current) =>
+      current.map((item) =>
+        item.id === id && item.type === "track" ? { ...item, ...patch } : item,
+      ),
+    );
+
+  const endpointFor = (track: GpxTrack, end: "start" | "end"): Place => {
+    const coordinate =
+      end === "start"
+        ? track.coordinates[0]
+        : track.coordinates[track.coordinates.length - 1];
+    return {
+      id: `${track.id}-${end}`,
+      type: "place",
+      name: end === "start" ? `${track.name} start` : `${track.name} end`,
+      description: "",
+      lng: coordinate[0],
+      lat: coordinate[1],
+      marker: "pin",
+    };
+  };
+
+  const cutTrack = (track: GpxTrack, result: SearchResult) => {
+    try {
+      const split = splitTrackAtPlace(track, {
+        id: crypto.randomUUID(),
+        type: "place",
+        ...result,
+        description: "",
+        marker: "pin",
+      });
+      setItems((current) =>
+        current.flatMap((item) => (item.id === track.id ? split : [item])),
+      );
+      setEditingTrack(null);
+      setTrackQuery("");
+      setNotice(
+        `Split “${track.name}” at the track point closest to ${result.name}.`,
+      );
+    } catch (error) {
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "The track could not be split.",
+      );
+    }
+  };
 
   const addPlace = (result: SearchResult) => {
     const place: Place = {
@@ -455,6 +660,15 @@ export function App() {
           >
             <Settings2 size={17} />
             <span>Settings</span>
+          </button>
+          <button
+            className="button ghost"
+            onClick={() => setShareOpen(true)}
+            aria-label="Share journey"
+            disabled={!items.length}
+          >
+            <Share2 size={17} />
+            <span>Share</span>
           </button>
           <button
             className="button dark"
@@ -598,15 +812,17 @@ export function App() {
                             "Add a story and photograph"}
                       </small>
                     </div>
-                    {item.type === "place" && (
-                      <button
-                        className="mini-button"
-                        onClick={() => setEditingPlace(item.id)}
-                      >
-                        <SlidersHorizontal size={14} />
-                        Edit
-                      </button>
-                    )}
+                    <button
+                      className="mini-button"
+                      onClick={() =>
+                        item.type === "place"
+                          ? setEditingPlace(item.id)
+                          : setEditingTrack(item.id)
+                      }
+                    >
+                      <SlidersHorizontal size={14} />
+                      Edit
+                    </button>
                     <button
                       className="icon-button danger"
                       onClick={() =>
@@ -653,7 +869,7 @@ export function App() {
         <section className="map-panel">
           <JourneyMap
             ref={mapRef}
-            places={places}
+            places={mapPlaces}
             route={route}
             mapSource={activeMap}
             routeColor={settings.routeColor}
@@ -1310,6 +1526,146 @@ export function App() {
         </Modal>
       )}
 
+      {activeTrack && (
+        <Modal
+          title="Edit GPX track"
+          eyebrow="Track details"
+          onClose={() => {
+            setEditingTrack(null);
+            setTrackQuery("");
+          }}
+          wide
+        >
+          <div className="track-editor">
+            <label>
+              Track name
+              <input
+                value={activeTrack.name}
+                onChange={(event) =>
+                  updateTrack(activeTrack.id, { name: event.target.value })
+                }
+              />
+            </label>
+            <div className="endpoint-grid">
+              {(["start", "end"] as const).map((end) => {
+                const key = end === "start" ? "startPlace" : "endPlace";
+                const endpoint = activeTrack[key];
+                return (
+                  <section className="endpoint-editor" key={end}>
+                    <div className="section-heading">
+                      <MapPin size={18} />
+                      <div>
+                        <strong>
+                          {end === "start" ? "Track start" : "Track end"}
+                        </strong>
+                        <small>
+                          Optional numbered place, caption, and photograph.
+                        </small>
+                      </div>
+                    </div>
+                    {!endpoint ? (
+                      <button
+                        className="button ghost"
+                        onClick={() =>
+                          updateTrack(activeTrack.id, {
+                            [key]: endpointFor(activeTrack, end),
+                          })
+                        }
+                      >
+                        <Plus size={15} /> Add {end} place
+                      </button>
+                    ) : (
+                      <EndpointFields
+                        place={endpoint}
+                        photoAppearance={settings.photos}
+                        onChange={(place) =>
+                          updateTrack(activeTrack.id, { [key]: place })
+                        }
+                        onRemove={() =>
+                          updateTrack(activeTrack.id, { [key]: undefined })
+                        }
+                      />
+                    )}
+                  </section>
+                );
+              })}
+            </div>
+            <section className="track-cut">
+              <div className="section-heading">
+                <Scissors size={18} />
+                <div>
+                  <strong>Cut at a place</strong>
+                  <small>
+                    Search a place; the nearest GPX point becomes the cut.
+                  </small>
+                </div>
+              </div>
+              <input
+                aria-label="Search cut place"
+                value={trackQuery}
+                onChange={(event) => setTrackQuery(event.target.value)}
+                placeholder="Search a town or landmark…"
+              />
+              {!!trackResults.length && (
+                <div className="cut-results">
+                  {trackResults.map((result) => (
+                    <button
+                      key={`${result.lat}-${result.lng}`}
+                      onClick={() => cutTrack(activeTrack, result)}
+                    >
+                      <MapPin size={15} />
+                      <span>
+                        <strong>{result.name}</strong>
+                        <small>{result.subtitle}</small>
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </section>
+          </div>
+        </Modal>
+      )}
+
+      {shareOpen && (
+        <Modal
+          title="Share journey"
+          eyebrow="Continue anywhere"
+          onClose={() => setShareOpen(false)}
+        >
+          <div className="share-panel">
+            {qrDataUrl ? (
+              <img
+                src={qrDataUrl}
+                alt="QR code containing the shared journey URL"
+                className="share-qr"
+              />
+            ) : (
+              <div className="qr-unavailable">
+                <QrCode size={32} />
+                QR code unavailable
+              </div>
+            )}
+            {shareWarning && <p className="share-warning">{shareWarning}</p>}
+            <label>
+              Shareable URL
+              <textarea readOnly value={sharedUrl} rows={4} />
+            </label>
+            <button
+              className="button dark"
+              onClick={() => void navigator.clipboard.writeText(sharedUrl)}
+            >
+              Copy link
+            </button>
+            <p className="field-help">
+              The URL contains the complete journey and settings, including
+              photographs. Anyone with the link can open and continue editing
+              it.
+            </p>
+          </div>
+        </Modal>
+      )}
+
       {helpOpen && (
         <Modal
           title="How Wayfare works"
@@ -1324,7 +1680,9 @@ export function App() {
             </HelpStep>
             <HelpStep number="2" title="Mix places and tracks">
               A GPX track keeps its recorded shape. Wayfare routes from the
-              previous item to its start and from its end to the next item.
+              previous item to its start and from its end to the next item. Edit
+              a track to add optional named and photographed endpoints, or
+              search for a place and split the track at its nearest GPX point.
             </HelpStep>
             <HelpStep number="3" title="Tell the story">
               Choose Edit on a place to write its name and description, select a
@@ -1344,9 +1702,14 @@ export function App() {
               while Settings is open and updates after you close it.
             </HelpStep>
             <HelpStep number="6" title="Export">
-              Choose PNG, JPG, or WebP and a current-view, A4, A5, photo-book,
-              or photo-print size. You can also export the connected route as
-              GPX.
+              Choose PNG, JPG, or WebP and a print, photo-book, screen, or
+              social format. Exports temporarily compose the map in the chosen
+              aspect ratio. You can also export the connected route as GPX.
+            </HelpStep>
+            <HelpStep number="7" title="Share and continue">
+              Share creates a URL containing the journey and settings. Copy it
+              or scan the local QR code on another device. Wayfare warns when
+              photographs make the link too large for reliable QR scanning.
             </HelpStep>
           </div>
           <div className="help-note">
@@ -1438,6 +1801,91 @@ export function App() {
         </Modal>
       )}
     </main>
+  );
+}
+
+function EndpointFields({
+  place,
+  photoAppearance,
+  onChange,
+  onRemove,
+}: {
+  place: Place;
+  photoAppearance: PhotoAppearance;
+  onChange: (place: Place) => void;
+  onRemove: () => void;
+}) {
+  const patch = (value: Partial<Place>) => onChange({ ...place, ...value });
+  return (
+    <div className="endpoint-fields">
+      <input
+        aria-label={`Name for ${place.name}`}
+        value={place.name}
+        onChange={(event) => patch({ name: event.target.value })}
+        placeholder="Place name"
+      />
+      <textarea
+        aria-label={`Description for ${place.name}`}
+        value={place.description}
+        onChange={(event) => patch({ description: event.target.value })}
+        placeholder="Description"
+      />
+      <label className="upload-zone compact-upload">
+        {place.photo ? "Replace photograph" : "Add photograph"}
+        <input
+          type="file"
+          accept="image/*"
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            if (!file) return;
+            void resizeImage(file).then((dataUrl) =>
+              patch({ photo: defaultPhoto(dataUrl, file.name) }),
+            );
+          }}
+        />
+      </label>
+      {place.photo && (
+        <>
+          <div
+            className="photo-preview endpoint-photo"
+            style={{
+              width: Math.min(120, photoAppearance.size),
+              height: Math.min(120, photoAppearance.size),
+              border: `${photoAppearance.borderWidth}px solid ${photoAppearance.borderColor}`,
+              borderRadius: `${photoAppearance.radius}%`,
+              backgroundImage: `url("${place.photo.dataUrl}")`,
+              backgroundSize: `${place.photo.zoom * 100}%`,
+              backgroundPosition: `${place.photo.cropX}% ${place.photo.cropY}%`,
+            }}
+          />
+          <Slider
+            label="Crop left/right"
+            min={0}
+            max={100}
+            value={place.photo.cropX}
+            onChange={(cropX) => patch({ photo: { ...place.photo!, cropX } })}
+          />
+          <Slider
+            label="Crop up/down"
+            min={0}
+            max={100}
+            value={place.photo.cropY}
+            onChange={(cropY) => patch({ photo: { ...place.photo!, cropY } })}
+          />
+          <Slider
+            label="Photo zoom"
+            min={1}
+            max={3}
+            step={0.1}
+            value={place.photo.zoom}
+            onChange={(zoom) => patch({ photo: { ...place.photo!, zoom } })}
+          />
+        </>
+      )}
+      <button className="text-danger" onClick={onRemove}>
+        Remove endpoint place
+      </button>
+    </div>
   );
 }
 

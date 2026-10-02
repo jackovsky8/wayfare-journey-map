@@ -9,6 +9,8 @@ Wayfare is a frontend-only travel-map editor for turning places, stories, photog
 - Search for cities, landmarks, and addresses through OpenStreetMap Nominatim.
 - Add, rename, reorder, insert, and remove places.
 - Import GPX tracks containing `trkpt` or `rtept` points.
+- Add optional numbered start and end places to a GPX track, including names, descriptions, cropped photographs, and map callouts.
+- Edit and split a GPX track by searching for a place; Wayfare cuts at the nearest recorded GPX point and inserts the selected place between both track segments.
 - Mix places and GPX tracks in one ordered journey.
 - Preserve every imported track’s recorded geometry.
 - Route from the previous place or track endpoint to the next track’s start.
@@ -35,7 +37,7 @@ Wayfare is a frontend-only travel-map editor for turning places, stories, photog
 - Configure connector color and width in **Settings → Callout placement & connectors**.
 - Configure the shared place-label typography, colors, border, rounding, and description visibility.
 
-Photographs are resized before being saved to reduce browser-storage usage.
+Photographs are resized to at most 1024 px and JPEG-compressed before being saved, reducing browser-storage, URL-sharing, and QR-code size while retaining useful visible detail.
 
 ### Included free map styles
 
@@ -76,8 +78,9 @@ Enter the attribution required by the map provider. URLs and custom-map definiti
 - Automatically frame the complete journey or select a manual zoom.
 - Configure route color and width.
 - Export PNG, JPG, or WebP images containing the map, route, captions, photographs, frames, and the same collision-aware connector layout shown in the editor.
-- Choose the current view, A4/A5 portrait or landscape, square or landscape photo-book pages, or a 10 × 15 cm photo-print preset.
-- Preserve the complete map without distortion; fixed page formats add neutral margins when their aspect ratio differs.
+- Choose the current view, A3/A4/A5, US Letter, common photo prints, square/landscape photo books, Full HD, 4:3, square, or phone-story formats.
+- Fixed-size exports temporarily recompose and fit the map in the selected aspect ratio instead of stretching a phone-shaped screenshot.
+- Image and GPX downloads use Blob URLs; supported iPhone/iPad browsers can use the native share sheet for generated images.
 - Export a GPX file containing place waypoints and the complete connected journey track.
 - Use the built-in Help section for an in-app workflow guide.
 
@@ -112,9 +115,9 @@ npm run test:browser
 npm run build
 ```
 
-The unit tests cover reordering, distance calculation, GPX import/export, malformed GPX handling, connecting imported tracks to adjacent places, box collisions, route intersection, callout placement, and connector geometry.
+The unit tests cover reordering, distance calculation, GPX import/export (including endpoint places), malformed GPX handling, splitting a track at its closest coordinate, connecting imported tracks to adjacent places, Base64 sharing, URL-size warnings, box collisions, route intersection, callout placement, and connector geometry.
 
-The Playwright suite covers place editing, GPX import, photograph controls, grouped settings, custom map sources, Help, exports, and browser persistence. Search, routing, and map-style responses are mocked, so browser tests require no API key.
+The Playwright suite covers desktop and mobile place editing, GPX import and endpoint editing, photograph controls, grouped settings, custom map sources, Help, every export preset, URL/QR sharing, and browser persistence. Search, routing, and map-style responses are mocked, so browser tests require no API key.
 
 ## GitHub Pages deployment
 
@@ -129,4 +132,10 @@ Vite uses relative asset paths, so the build supports both root domains and GitH
 
 ## Responsive layout
 
-On tablets and phones, the map appears first and the journey editor follows below it. Toolbars contract to the available width, settings and editors become bottom sheets on narrow phones, and multi-column controls collapse to touch-friendly single columns.
+On tablets and phones, a compact map appears first while the beginning of the journey list remains visible in the first screen. Toolbars contract to the available width, settings and editors become bottom sheets on narrow phones, and multi-column controls collapse to touch-friendly single columns.
+
+## Sharing a complete journey
+
+Choose **Share** to serialize journey items, GPX coordinates, endpoint places, appearance settings, descriptions, and photographs into URL-safe Base64 in the `journey` query parameter. Opening that URL on another browser imports the complete configuration for continued editing. The Mapbox session token is deliberately excluded.
+
+The Share dialog generates the QR code entirely in the browser. Because QR codes and browsers have practical URL-size limits, Wayfare warns and suppresses the QR code when photographs make the URL too large. The full URL can still be copied, but for reliable QR sharing use no photographs or one small photograph.

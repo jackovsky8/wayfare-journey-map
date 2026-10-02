@@ -34,6 +34,8 @@ export interface GpxTrack {
   name: string;
   coordinates: [number, number][];
   sourceFile: string;
+  startPlace?: Place;
+  endPlace?: Place;
 }
 
 export type JourneyItem = Place | GpxTrack;

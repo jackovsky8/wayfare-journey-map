@@ -688,7 +688,7 @@ h2 {
     height: auto;
     min-height: calc(100vh - 60px);
     grid-template-columns: 1fr;
-    grid-template-rows: minmax(52svh, 420px) auto;
+    grid-template-rows: minmax(36svh, 260px) auto;
     padding: 8px;
   }
   .journey-panel {
@@ -725,7 +725,7 @@ h2 {
     padding: 9px 10px;
   }
   .workspace {
-    grid-template-rows: minmax(48svh, 360px) auto;
+    grid-template-rows: minmax(34svh, 240px) auto;
     gap: 7px;
     padding: 6px;
   }
@@ -755,6 +755,104 @@ h2 {
     max-height: 92svh;
     padding: 20px 16px calc(20px + env(safe-area-inset-bottom));
     border-radius: 18px 18px 0 0;
+  }
+}
+
+.track-editor,
+.endpoint-fields,
+.share-panel {
+  display: grid;
+  gap: 13px;
+}
+
+.track-editor > label,
+.endpoint-fields > label,
+.share-panel > label {
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.track-editor input,
+.track-editor textarea,
+.share-panel textarea {
+  width: 100%;
+  padding: 10px 11px;
+  border: 1px solid #ccc6ba;
+  border-radius: 9px;
+  background: #fff;
+}
+
+.endpoint-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.endpoint-editor,
+.track-cut {
+  padding: 14px;
+  border: 1px solid #ded8cc;
+  border-radius: 13px;
+  background: #fff;
+}
+
+.endpoint-photo {
+  margin: 0 auto;
+}
+
+.compact-upload {
+  padding: 9px;
+}
+
+.cut-results {
+  display: grid;
+  max-height: 190px;
+  overflow-y: auto;
+  border: 1px solid #ded8cc;
+  border-radius: 9px;
+}
+
+.cut-results button {
+  display: flex;
+  gap: 9px;
+  align-items: center;
+  padding: 10px;
+  border: 0;
+  border-bottom: 1px solid #ece7dd;
+  background: #fff;
+  text-align: left;
+}
+
+.cut-results span {
+  display: grid;
+}
+
+.share-qr {
+  width: min(280px, 100%);
+  margin: auto;
+  image-rendering: pixelated;
+}
+
+.share-warning,
+.qr-unavailable {
+  padding: 12px;
+  border-radius: 9px;
+  background: #fff1d8;
+  color: #80551d;
+  font-size: 13px;
+}
+
+.qr-unavailable {
+  display: grid;
+  justify-items: center;
+  gap: 7px;
+}
+
+@media (max-width: 620px) {
+  .endpoint-grid {
+    grid-template-columns: 1fr;
   }
 }
 

@@ -6,6 +6,7 @@ import {
   moveItem,
   parseGpx,
   straightRoute,
+  splitTrackAtPlace,
 } from "./journey";
 import type { JourneyItem, Place } from "../types";
 
@@ -54,6 +55,29 @@ describe("journey helpers", () => {
     expect(gpx.match(/<trkpt/g)).toHaveLength(2);
   });
 
+  it("exports optional GPX endpoint places as waypoints", () => {
+    const track = {
+      id: "track-with-ends",
+      type: "track" as const,
+      name: "Coastal walk",
+      sourceFile: "coast.gpx",
+      coordinates: [
+        [9, 44],
+        [9.2, 44.2],
+      ] as [number, number][],
+      startPlace: { ...places[0], id: "start", name: "Trail start" },
+      endPlace: { ...places[1], id: "end", name: "Trail finish" },
+    };
+    const gpx = buildGpx([track], {
+      coordinates: track.coordinates,
+      distanceMeters: 0,
+      durationSeconds: 0,
+    });
+    expect(gpx).toContain("Trail start");
+    expect(gpx).toContain("Trail finish");
+    expect(gpx.match(/<wpt/g)).toHaveLength(2);
+  });
+
   it("parses track and route points from a GPX file", () => {
     const track = parseGpx(
       `<?xml version="1.0"?><gpx><trk><name>Alpine day</name><trkseg><trkpt lat="47.1" lon="15.1"/><trkpt lat="47.2" lon="15.2"/></trkseg></trk></gpx>`,
@@ -96,5 +120,29 @@ describe("journey helpers", () => {
       [15.4395, 47.0707],
     ]);
     expect(route.durationSeconds).toBe(10);
+  });
+
+  it("splits a track at the coordinate closest to a selected place", () => {
+    const track = {
+      id: "track",
+      type: "track" as const,
+      name: "Walk",
+      sourceFile: "walk.gpx",
+      coordinates: [
+        [16, 48],
+        [16.1, 48.1],
+        [16.2, 48.2],
+        [16.3, 48.3],
+      ] as [number, number][],
+    };
+    const [before, cutPlace, after] = splitTrackAtPlace(track, {
+      ...places[0],
+      name: "Coffee",
+      lng: 16.11,
+      lat: 48.11,
+    });
+    expect(before.coordinates.at(-1)).toEqual([16.1, 48.1]);
+    expect(after.coordinates[0]).toEqual([16.1, 48.1]);
+    expect([cutPlace.lng, cutPlace.lat]).toEqual([16.1, 48.1]);
   });
 });
