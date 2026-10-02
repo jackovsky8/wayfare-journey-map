@@ -1766,7 +1766,7 @@ export function App() {
             <SettingGroup
               icon={<LocateFixed />}
               title="Callout placement & connectors"
-              description="Keeps labels and photographs clear of the route and links them to their places."
+              description="Globally minimizes overlap, route obstruction, arrow crossings, and distance."
             >
               <p className="field-help">
                 Wayfare searches outward from every place for the nearest free
@@ -2269,9 +2269,11 @@ export function App() {
               quota. Crop and zoom each image individually. Configure photo
               size, frame, and rounding once in Photograph style; the same
               design is used in the editor, map, and image export. Wayfare's
-              geometry engine places callouts near their places while avoiding
-              the route, map edge, and each other. A configurable arrow always
-              links each callout to its exact place.
+              background geometry engine optimizes all callouts together. It
+              prioritizes no overlap, no route obstruction, fewer crossed
+              arrows, and then the shortest useful total distance. One callout
+              can move farther when that makes the complete layout clearer. A
+              configurable arrow always links each callout to its exact place.
             </HelpStep>
             <HelpStep number="5" title="Style the map">
               Settings are grouped into background, route, labels, custom maps,

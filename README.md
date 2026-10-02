@@ -109,6 +109,10 @@ Enter the attribution required by the map provider. URLs and custom-map definiti
 
 Browser storage is still finite and controlled by the browser or operating system. For very large journeys, periodically export the journey as a backup.
 
+## Callout layout optimization
+
+Labels, photographs, and their connectors are placed as one global optimization problem in a Web Worker. Wayfare evaluates several initial arrangements and repeatedly improves the complete layout instead of fixing callouts one by one. The objective prioritizes avoiding callout overlap, keeping callouts off the route and inside the map, preventing arrows from passing through other callouts, reducing connector crossings, and then minimizing total and worst-case distance from each place. A callout may therefore move slightly farther away when that produces a substantially clearer overall composition. The same optimizer and geometry are used for the interactive preview and exported image.
+
 ## Local development
 
 Node.js 22 or newer is recommended.

@@ -4,6 +4,8 @@ import {
   boxIntersectsPolyline,
   connectorPath,
   layoutCallouts,
+  measureLayout,
+  segmentsCross,
 } from "./callout-layout";
 
 describe("callout collision layout", () => {
@@ -42,6 +44,52 @@ describe("callout collision layout", () => {
     expect(boxesOverlap(placements[0].box, placements[1].box, 10)).toBe(false);
     expect(boxIntersectsPolyline(placements[0].box, route, 8)).toBe(false);
     expect(boxIntersectsPolyline(placements[1].box, route, 8)).toBe(false);
+    expect(
+      measureLayout(placements, route, { width: 320, height: 260 }),
+    ).toMatchObject({
+      overlaps: 0,
+      routeIntersections: 0,
+      connectorCrossings: 0,
+      connectorBoxIntersections: 0,
+    });
+  });
+
+  it("detects crossed connectors", () => {
+    expect(
+      segmentsCross(
+        { x: 0, y: 0 },
+        { x: 100, y: 100 },
+        { x: 100, y: 0 },
+        { x: 0, y: 100 },
+      ),
+    ).toBe(true);
+  });
+
+  it("optimizes a dense group as one layout", () => {
+    const placements = layoutCallouts(
+      [
+        { id: "a", anchor: { x: 145, y: 145 }, width: 92, height: 60 },
+        { id: "b", anchor: { x: 160, y: 145 }, width: 92, height: 60 },
+        { id: "c", anchor: { x: 145, y: 160 }, width: 92, height: 60 },
+        { id: "d", anchor: { x: 160, y: 160 }, width: 92, height: 60 },
+      ],
+      [
+        { x: 20, y: 152 },
+        { x: 300, y: 152 },
+      ],
+      { width: 320, height: 320 },
+    );
+    const metrics = measureLayout(
+      placements,
+      [
+        { x: 20, y: 152 },
+        { x: 300, y: 152 },
+      ],
+      { width: 320, height: 320 },
+    );
+    expect(metrics.overlaps).toBe(0);
+    expect(metrics.connectorCrossings).toBe(0);
+    expect(metrics.connectorBoxIntersections).toBe(0);
   });
 
   it("keeps a free callout immediately beside its place and joins its edge", () => {
