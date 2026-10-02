@@ -150,7 +150,7 @@ test("groups settings, changes labels and accepts a custom map", async ({
   await page.getByLabel("Arrow style").selectOption("dashed");
   await expect(page.getByLabel("Arrow style")).toHaveValue("dashed");
   await page.getByRole("button", { name: "Add another map" }).click();
-  await page.getByLabel("Name").fill("My local tiles");
+  await page.getByLabel("Custom map name").fill("My local tiles");
   await page.getByLabel("Source type").selectOption("raster");
   await page.getByLabel("Map URL").fill("https://example.test/{z}/{x}/{y}.png");
   await page.getByRole("button", { name: "Add and select map" }).click();
@@ -225,11 +225,7 @@ test("offers privacy information and granular vendor consent", async ({
   await expect(
     page.getByRole("heading", { name: "Privacy settings" }),
   ).toBeVisible();
-  await page
-    .getByText("Cloudflare Web Analytics")
-    .locator("..")
-    .getByRole("checkbox")
-    .check();
+  await page.getByLabel("Allow Cloudflare Web Analytics").check();
   await page.getByRole("button", { name: "Save privacy settings" }).click();
   await page.getByRole("link", { name: "Privacy", exact: true }).click();
   await expect(

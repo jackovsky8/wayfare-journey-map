@@ -1710,6 +1710,7 @@ export function App() {
                 <label>
                   Name
                   <input
+                    aria-label="Custom map name"
                     value={newMap.name}
                     onChange={(event) =>
                       setNewMap((current) => ({
@@ -2405,6 +2406,7 @@ function PrivacyCenter({
         <label>
           <input
             type="checkbox"
+            aria-label="Allow Cloudflare Web Analytics"
             checked={choice.analytics}
             onChange={(event) =>
               setChoice((current) => ({
@@ -2421,6 +2423,7 @@ function PrivacyCenter({
         <label>
           <input
             type="checkbox"
+            aria-label="Allow Google AdSense"
             checked={choice.ads}
             onChange={(event) =>
               setChoice((current) => ({
