@@ -16,6 +16,8 @@ describe("QR share message", () => {
     );
     expect(message.text).toContain("Scan frames with this device");
     expect(message.text).toContain("Keep scanning until it reaches 100%");
+    expect(message.text.match(/https:\/\//g)).toHaveLength(1);
+    expect(message.text.match(/wayfare-journey-map/g)).toHaveLength(1);
   });
 
   it("falls back to the current page without retaining its query or hash", () => {

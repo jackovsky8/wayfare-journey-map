@@ -19,9 +19,8 @@ export function buildQrShareMessage(
     appUrl: appUrl.toString(),
     importUrl: importUrl.toString(),
     text: [
-      `Wayfare: ${appUrl}`,
       "To receive this journey, open the import link, tap “Scan frames with this device”, allow camera access, and point the camera at the attached animated QR GIF on another screen. Keep scanning until it reaches 100%.",
-      `Import and scan: ${importUrl}`,
+      `Open Wayfare and import this journey: ${importUrl}`,
     ].join("\n\n"),
   };
 }

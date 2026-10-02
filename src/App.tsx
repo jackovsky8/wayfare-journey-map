@@ -933,14 +933,13 @@ export function App() {
           await navigator.share({
             title: `Wayfare journey: ${journey.name}`,
             text: shareMessage.text,
-            url: shareMessage.importUrl,
             files: [file],
           });
           return;
         } catch (error) {
           if ((error as DOMException).name === "AbortError") return;
-          // Some browsers report file sharing support but reject mixed
-          // file-and-link payloads. Continue with download + copied link.
+          // Some browsers report file sharing support but reject the payload.
+          // Continue with download + copied instructions.
         }
       }
       const url = URL.createObjectURL(blob);
