@@ -2273,7 +2273,10 @@ export function App() {
               prioritizes no overlap, no route obstruction, fewer crossed
               arrows, and then the shortest useful total distance. One callout
               can move farther when that makes the complete layout clearer. A
-              configurable arrow always links each callout to its exact place.
+              fast preview appears first; the worker replaces it with a refined
+              arrangement after map movement stops. Export waits for the full
+              optimization. A configurable arrow always links each callout to
+              its exact place.
             </HelpStep>
             <HelpStep number="5" title="Style the map">
               Settings are grouped into background, route, labels, custom maps,

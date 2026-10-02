@@ -128,7 +128,14 @@ const computeLayoutInBackground = (
       worker.terminate();
       reject(event.error);
     };
-    worker.postMessage({ id: 1, items, route, viewport, options });
+    worker.postMessage({
+      id: 1,
+      items,
+      route,
+      viewport,
+      options,
+      progressive: false,
+    });
   });
 
 function drawConnectors(
@@ -327,6 +334,8 @@ export const JourneyMap = forwardRef<JourneyMapHandle, Props>(
           width: map.getContainer().clientWidth,
           height: map.getContainer().clientHeight,
         },
+        options: { optimizationPasses: 4, startingLayouts: 2 },
+        progressive: true,
       });
     };
 
@@ -359,6 +368,7 @@ export const JourneyMap = forwardRef<JourneyMapHandle, Props>(
         if (!place.name && !place.photo) return;
         const element = document.createElement("div");
         element.className = "map-callout";
+        element.style.opacity = "0";
         element.style.setProperty(
           "--label-bg",
           latestRef.current.labels.backgroundColor,
@@ -735,6 +745,8 @@ export const JourneyMap = forwardRef<JourneyMapHandle, Props>(
             minDistance: 18 * scale,
             maxDistance: 242 * scale,
             distanceStep: 32 * scale,
+            optimizationPasses: 10,
+            startingLayouts: 4,
           },
         );
         exportPlacements.forEach((placement) =>

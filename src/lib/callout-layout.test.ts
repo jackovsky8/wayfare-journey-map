@@ -4,6 +4,7 @@ import {
   boxIntersectsPolyline,
   connectorPath,
   layoutCallouts,
+  layoutCalloutsFast,
   measureLayout,
   segmentsCross,
 } from "./callout-layout";
@@ -108,6 +109,20 @@ describe("callout collision layout", () => {
     expect(placement.box.bottom).toBe(132);
     expect(placement.connectorStart).toEqual({ x: 150, y: 132 });
     expect(placement.connectorEnd).toEqual({ x: 150, y: 150 });
+  });
+
+  it("returns an immediate usable preview before global refinement", () => {
+    const placements = layoutCalloutsFast(
+      [
+        { id: "a", anchor: { x: 80, y: 90 }, width: 70, height: 40 },
+        { id: "b", anchor: { x: 95, y: 90 }, width: 70, height: 40 },
+      ],
+      [],
+      { width: 260, height: 220 },
+    );
+    expect(placements).toHaveLength(2);
+    expect(placements.every(({ box }) => Number.isFinite(box.left))).toBe(true);
+    expect(boxesOverlap(placements[0].box, placements[1].box, 10)).toBe(false);
   });
 
   it("creates straight and curved connector paths", () => {

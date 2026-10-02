@@ -28,6 +28,8 @@ export interface LayoutOptions {
   minDistance?: number;
   maxDistance?: number;
   distanceStep?: number;
+  optimizationPasses?: number;
+  startingLayouts?: number;
 }
 
 export const boxesOverlap = (a: Box, b: Box, padding = 0) =>
@@ -275,7 +277,7 @@ const optimize = (
 ) => {
   const placements = [...initial];
   let score = scoreLayout(placements, route, viewport, options);
-  for (let pass = 0; pass < 10; pass += 1) {
+  for (let pass = 0; pass < (options.optimizationPasses ?? 8); pass += 1) {
     let improved = false;
     for (let index = 0; index < placements.length; index += 1) {
       let best = placements[index];
@@ -307,6 +309,67 @@ const optimize = (
   return { placements, score };
 };
 
+export function layoutCalloutsFast(
+  items: CalloutItem[],
+  route: Point[],
+  viewport: { width: number; height: number },
+  options: LayoutOptions = {},
+): CalloutPlacement[] {
+  const padding = options.padding ?? 10;
+  const clearance = options.routeClearance ?? 8;
+  const margin = options.viewportMargin ?? 8;
+  const placed: Candidate[] = [];
+  items.forEach((item) => {
+    const candidates = createCandidates(
+      item,
+      options.minDistance ?? 18,
+      options.maxDistance ?? 242,
+      options.distanceStep ?? 32,
+    );
+    let best = candidates[0];
+    let bestScore = Number.POSITIVE_INFINITY;
+    candidates.forEach((candidate) => {
+      const overlaps = placed.filter((other) =>
+        boxesOverlap(candidate.box, other.box, padding),
+      ).length;
+      const connectorBoxes = placed.filter((other) =>
+        segmentIntersectsBox(
+          candidate.connectorStart,
+          candidate.connectorEnd,
+          other.box,
+        ),
+      ).length;
+      const connectorCrossings = placed.filter((other) =>
+        segmentsCross(
+          candidate.connectorStart,
+          candidate.connectorEnd,
+          other.connectorStart,
+          other.connectorEnd,
+        ),
+      ).length;
+      const score =
+        overlaps * 1_000_000_000 +
+        (boxIntersectsPolyline(candidate.box, route, clearance)
+          ? 300_000_000
+          : 0) +
+        connectorBoxes * 150_000_000 +
+        connectorCrossings * 10_000_000 +
+        boxOverflow(candidate.box, viewport, margin) * 20_000_000 +
+        candidate.distance * 100 +
+        candidate.preference * 0.001;
+      if (score < bestScore) {
+        best = candidate;
+        bestScore = score;
+      }
+    });
+    placed.push(best);
+  });
+  return placed.map(
+    ({ preference: _preference, distance: _distance, ...placement }) =>
+      placement,
+  );
+}
+
 export function layoutCallouts(
   items: CalloutItem[],
   route: Point[],
@@ -337,7 +400,7 @@ export function layoutCallouts(
   ];
 
   let best: { placements: Candidate[]; score: number } | undefined;
-  orders.forEach((order) => {
+  orders.slice(0, options.startingLayouts ?? 4).forEach((order) => {
     const initial = new Array<Candidate>(items.length);
     order.forEach((index) => {
       let chosen = candidates[index][0];

@@ -111,7 +111,7 @@ Browser storage is still finite and controlled by the browser or operating syste
 
 ## Callout layout optimization
 
-Labels, photographs, and their connectors are placed as one global optimization problem in a Web Worker. Wayfare evaluates several initial arrangements and repeatedly improves the complete layout instead of fixing callouts one by one. The objective prioritizes avoiding callout overlap, keeping callouts off the route and inside the map, preventing arrows from passing through other callouts, reducing connector crossings, and then minimizing total and worst-case distance from each place. A callout may therefore move slightly farther away when that produces a substantially clearer overall composition. The same optimizer and geometry are used for the interactive preview and exported image.
+Labels, photographs, and their connectors are placed as one global optimization problem in a Web Worker. The worker immediately returns a fast collision-aware preview, then—after map movement settles—replaces it with a refined layout. This prevents unplaced callouts appearing in the top-left corner and keeps panning responsive. Wayfare evaluates several initial arrangements and repeatedly improves the complete layout instead of fixing callouts one by one. The objective prioritizes avoiding callout overlap, keeping callouts off the route and inside the map, preventing arrows from passing through other callouts, reducing connector crossings, and then minimizing total and worst-case distance from each place. A callout may therefore move slightly farther away when that produces a substantially clearer overall composition. Image export waits for the complete higher-quality optimization and uses the same geometry.
 
 ## Local development
 
