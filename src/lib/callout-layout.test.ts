@@ -52,6 +52,7 @@ describe("callout collision layout", () => {
       routeIntersections: 0,
       connectorCrossings: 0,
       connectorBoxIntersections: 0,
+      hiddenPlaces: 0,
     });
   });
 
@@ -155,6 +156,30 @@ describe("callout collision layout", () => {
     const metrics = measureLayout(placements, [], viewport);
     expect(metrics.horizontalOrderViolations).toBe(0);
     expect(metrics.verticalOrderViolations).toBe(0);
+    expect(metrics.hiddenPlaces).toBe(0);
+  });
+
+  it("keeps every place marker and the route between places visible", () => {
+    const route = [
+      { x: 55, y: 150 },
+      { x: 390, y: 150 },
+    ];
+    const viewport = { width: 440, height: 320 };
+    const placements = layoutCallouts(
+      [
+        { id: "left", anchor: { x: 90, y: 150 }, width: 118, height: 72 },
+        { id: "middle", anchor: { x: 220, y: 150 }, width: 118, height: 72 },
+        { id: "right", anchor: { x: 350, y: 150 }, width: 118, height: 72 },
+      ],
+      route,
+      viewport,
+      { optimizationPasses: 10, startingLayouts: 4 },
+    );
+    const metrics = measureLayout(placements, route, viewport);
+    expect(metrics.overlaps).toBe(0);
+    expect(metrics.hiddenPlaces).toBe(0);
+    expect(metrics.routeIntersections).toBe(0);
+    expect(metrics.connectorCrossings).toBe(0);
   });
 
   it("prioritizes spatial order and uncrossed arrows in a dense diagonal", () => {

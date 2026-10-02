@@ -24,6 +24,7 @@ export interface CalloutPlacement extends CalloutItem {
 export interface LayoutOptions {
   padding?: number;
   routeClearance?: number;
+  placeClearance?: number;
   viewportMargin?: number;
   minDistance?: number;
   maxDistance?: number;
@@ -208,6 +209,7 @@ export interface LayoutMetrics {
   maximumDistance: number;
   horizontalOrderViolations: number;
   verticalOrderViolations: number;
+  hiddenPlaces: number;
 }
 
 // These bands deliberately make the objective lexicographic for realistic
@@ -219,12 +221,21 @@ const COST = {
   connectorBox: 10_000_000_000_000,
   connectorCrossing: 8_000_000_000_000,
   orderViolation: 6_000_000_000_000,
-  routeIntersection: 4_000_000_000_000,
+  routeIntersection: 80_000_000_000_000,
+  hiddenPlace: 80_000_000_000_000,
   overflow: 100_000_000_000,
 } as const;
 
 const violatesOrder = (anchorDelta: number, boxDelta: number) =>
   Math.abs(anchorDelta) > 2 && anchorDelta * boxDelta <= 0;
+
+const boxHidesPlace = (box: Box, anchor: Point, clearance: number) =>
+  inside(anchor, {
+    left: box.left - clearance,
+    right: box.right + clearance,
+    top: box.top - clearance,
+    bottom: box.bottom + clearance,
+  });
 
 export function measureLayout(
   placements: CalloutPlacement[],
@@ -245,6 +256,7 @@ export function measureLayout(
     maximumDistance: 0,
     horizontalOrderViolations: 0,
     verticalOrderViolations: 0,
+    hiddenPlaces: 0,
   };
   placements.forEach((placement) => {
     const distance = Math.hypot(
@@ -256,6 +268,14 @@ export function measureLayout(
     metrics.overflow += boxOverflow(placement.box, viewport, margin);
     if (boxIntersectsPolyline(placement.box, route, clearance))
       metrics.routeIntersections += 1;
+    if (
+      boxHidesPlace(
+        placement.box,
+        placement.anchor,
+        options.placeClearance ?? 10,
+      )
+    )
+      metrics.hiddenPlaces += 1;
   });
   for (let first = 0; first < placements.length; first += 1) {
     for (let second = first + 1; second < placements.length; second += 1) {
@@ -274,6 +294,10 @@ export function measureLayout(
         metrics.horizontalOrderViolations += 1;
       if (violatesOrder(anchorDy, boxDy)) metrics.verticalOrderViolations += 1;
       if (boxesOverlap(a.box, b.box, padding)) metrics.overlaps += 1;
+      if (boxHidesPlace(a.box, b.anchor, options.placeClearance ?? 10))
+        metrics.hiddenPlaces += 1;
+      if (boxHidesPlace(b.box, a.anchor, options.placeClearance ?? 10))
+        metrics.hiddenPlaces += 1;
       if (
         segmentsCross(
           a.connectorStart,
@@ -316,6 +340,7 @@ const scoreLayout = (
     metrics.connectorCrossings * COST.connectorCrossing +
     metrics.horizontalOrderViolations * COST.orderViolation +
     metrics.verticalOrderViolations * COST.orderViolation +
+    metrics.hiddenPlaces * COST.hiddenPlace +
     metrics.overflow * COST.overflow +
     metrics.totalDistance * 100 +
     metrics.maximumDistance * 25 +
@@ -334,6 +359,9 @@ const unaryScore = (
 ) =>
   (boxIntersectsPolyline(candidate.box, route, options.routeClearance ?? 8)
     ? COST.routeIntersection
+    : 0) +
+  (boxHidesPlace(candidate.box, candidate.anchor, options.placeClearance ?? 10)
+    ? COST.hiddenPlace
     : 0) +
   boxOverflow(candidate.box, viewport, options.viewportMargin ?? 8) *
     COST.overflow +
@@ -364,7 +392,13 @@ const pairScore = (a: Candidate, b: Candidate, options: LayoutOptions) => {
       ? COST.connectorCrossing
       : 0) +
     (violatesOrder(anchorDx, boxDx) ? COST.orderViolation : 0) +
-    (violatesOrder(anchorDy, boxDy) ? COST.orderViolation : 0)
+    (violatesOrder(anchorDy, boxDy) ? COST.orderViolation : 0) +
+    (boxHidesPlace(a.box, b.anchor, options.placeClearance ?? 10)
+      ? COST.hiddenPlace
+      : 0) +
+    (boxHidesPlace(b.box, a.anchor, options.placeClearance ?? 10)
+      ? COST.hiddenPlace
+      : 0)
   );
 };
 
@@ -400,6 +434,8 @@ const pairNeedsRepair = (
     violatesOrder(anchorDy, boxDy) ||
     boxIntersectsPolyline(a.box, route, options.routeClearance ?? 8) ||
     boxIntersectsPolyline(b.box, route, options.routeClearance ?? 8) ||
+    boxHidesPlace(a.box, b.anchor, options.placeClearance ?? 10) ||
+    boxHidesPlace(b.box, a.anchor, options.placeClearance ?? 10) ||
     segmentIntersectsBox(a.connectorStart, a.connectorEnd, b.box) ||
     segmentIntersectsBox(b.connectorStart, b.connectorEnd, a.box) ||
     segmentsCross(
